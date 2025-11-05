@@ -20,8 +20,8 @@ public class AppointmentRepository : IAppointmentRepository
     }
 
     /// <summary>
-    /// Creates an appointment with atomic serial number assignment using PostgreSQL FOR UPDATE lock
-    /// This prevents race conditions when multiple requests come in simultaneously
+    /// Creates an appointment with atomic serial number assignment using AppointmentCounter table
+    /// This prevents race conditions by locking only a single counter row per doctor-hospital-date
     /// </summary>
     public async Task<int> CreateAppointmentAsync(
         int doctorHospitalId,
@@ -42,13 +42,20 @@ public class AppointmentRepository : IAppointmentRepository
 
             try
             {
-                // 1. Lock the DoctorHospital row to prevent concurrent modifications
-                // Use FromSqlRaw with FOR UPDATE to acquire a row-level lock
-                var doctorHospital = await _context.DoctorHospitals
+                // 1. Lock and get (or create) the counter row for this doctor-hospital-date combination
+                // Using raw SQL with FOR UPDATE to acquire row-level lock
+                var counter = await _context.AppointmentCounters
                     .FromSqlRaw(@"
-                     SELECT * FROM doctor_hospitals 
-                     WHERE id = {0} 
-                     FOR UPDATE", doctorHospitalId)
+                     SELECT * FROM appointment_counters 
+                      WHERE doctor_hospital_id = {0} AND appointment_date = {1}
+                     FOR UPDATE",
+                        doctorHospitalId,
+                        appointmentDate)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                // 2. Get the doctor-hospital association to check the daily limit
+                var doctorHospital = await _context.DoctorHospitals
+                    .Where(dh => dh.Id == doctorHospitalId)
                     .FirstOrDefaultAsync(cancellationToken);
 
                 if (doctorHospital is null)
@@ -57,41 +64,40 @@ public class AppointmentRepository : IAppointmentRepository
                         $"Doctor-Hospital association with ID {doctorHospitalId} not found.");
                 }
 
-                // 2. Get the current count of appointments for this doctor-hospital-date combination
-                // Lock these rows as well to prevent concurrent bookings
-                var existingAppointmentsCount = await _context.Appointments
-                    .FromSqlRaw(@"
-                     SELECT * FROM appointments 
-                     WHERE doctor_hospital_id = {0} 
-                        AND appointment_date = {1} AND status != {2}
-                     FOR UPDATE",
-                        doctorHospitalId,
-                        appointmentDate,
-                        (int)AppointmentStatus.Cancelled)
-                    .CountAsync(cancellationToken);
+                // 3. If counter doesn't exist, create it
+                if (counter is null)
+                {
+                    counter = new AppointmentCounter
+                    {
+                        DoctorHospitalId = doctorHospitalId,
+                        AppointmentDate = appointmentDate,
+                        CurrentSerial = 0,
+                        AppointmentCount = 0,
+                        UpdatedAt = DateTime.UtcNow
+                    };
+                    _context.AppointmentCounters.Add(counter);
+                    await _context.SaveChangesAsync(cancellationToken);
+                }
 
-                // 3. Check if the daily limit has been reached
-                if (existingAppointmentsCount >= doctorHospital.DailyPatientLimit)
+                // 4. Check if the daily limit has been reached
+                if (counter.AppointmentCount >= doctorHospital.DailyPatientLimit)
                 {
                     throw new DailyLimitReachedException(
                         $"Daily patient limit ({doctorHospital.DailyPatientLimit}) reached for this doctor at this hospital on {appointmentDate}.");
                 }
 
-                // 4. Get the next serial number (max + 1, or 1 if no appointments exist)
-                var maxSerial = await _context.Appointments
-                    .Where(a => a.DoctorHospitalId == doctorHospitalId
-                        && a.AppointmentDate == appointmentDate)
-                    .MaxAsync(a => (int?)a.SerialNumber, cancellationToken);
+                // 5. Increment the counter atomically
+                counter.CurrentSerial++;
+                counter.AppointmentCount++;
+                counter.UpdatedAt = DateTime.UtcNow;
 
-                var nextSerial = (maxSerial ?? 0) + 1;
-
-                // 5. Create the appointment
+                // 6. Create the appointment with the new serial number
                 var appointment = new Appointment
                 {
                     DoctorHospitalId = doctorHospitalId,
                     PatientId = patientId,
                     AppointmentDate = appointmentDate,
-                    SerialNumber = nextSerial,
+                    SerialNumber = counter.CurrentSerial,
                     Status = AppointmentStatus.Scheduled,
                     Notes = notes,
                     CreatedAt = DateTime.UtcNow
@@ -100,7 +106,7 @@ public class AppointmentRepository : IAppointmentRepository
                 _context.Appointments.Add(appointment);
                 await _context.SaveChangesAsync(cancellationToken);
 
-                // 6. Commit the transaction
+                // 7. Commit the transaction
                 await transaction.CommitAsync(cancellationToken);
 
                 return appointment.Id;

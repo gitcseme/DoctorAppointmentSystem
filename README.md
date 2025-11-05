@@ -1,324 +1,237 @@
-# Doctor Appointment System
+﻿# Doctor Appointment System
 
-A production-ready .NET 9 Web API for managing doctor appointments with PostgreSQL, featuring atomic serial number assignment and robust concurrency control.
+A production-ready .NET 9 Web API for managing doctor appointments with PostgreSQL, featuring atomic serial number assignment and optimized concurrency control using a dedicated counter table.
 
-## ?? Features
+## Features
 
 - **Serial-Based Appointments**: Appointments use sequential serial numbers (1, 2, 3...) instead of time slots
 - **Multi-Hospital Support**: Doctors can serve in multiple hospitals with different daily patient limits
-- **Concurrency Control**: PostgreSQL row-level locking (`FOR UPDATE`) ensures atomic serial number assignment
+- **Optimized Concurrency Control**: Single-row locking using `AppointmentCounter` table for O(1) performance
+- **PostgreSQL Row-Level Locking**: `FOR UPDATE` ensures atomic operations
 - **Daily Limit Enforcement**: Automatically rejects appointments when daily patient limit is reached
-- **Production-Ready**: Complete with error handling, logging, health checks, and API documentation
+- **Production-Ready**: Complete with error handling, global exception middleware, health checks, and Swagger API documentation
+- **.NET Aspire Orchestration**: Integrated service defaults and orchestration support
 
-## ??? Architecture
+## Architecture
 
 The solution follows Clean Architecture principles with three layers:
 
 ```
 src/
-??? DoctorAppointmentSystem.Core/          # Domain entities, interfaces, DTOs, exceptions
-??? DoctorAppointmentSystem.Infrastructure/ # EF Core, repositories, database access
-??? DoctorAppointmentSystem.Api/    # Web API controllers, middleware
+├── DoctorAppointmentSystem.Core/        # Domain entities, interfaces, DTOs, exceptions
+├── DoctorAppointmentSystem.Infrastructure/ # EF Core, repositories, database access
+├── DoctorAppointmentSystem.Api/ # Web API controllers, middleware
+├── DoctorAppointmentSystem.AppHost/       # .NET Aspire orchestration
+└── DoctorAppointmentSystem.ServiceDefaults/ # Shared service configurations
 ```
 
 ### Key Design Decisions
 
-1. **Row-Level Locking**: Uses PostgreSQL `FOR UPDATE` to lock rows during serial number assignment
-2. **Transaction Isolation**: Uses `ReadCommitted` isolation level with retry logic
-3. **Repository Pattern**: Clean separation between business logic and data access
-4. **Exception Handling**: Global middleware for consistent error responses
+1. **AppointmentCounter Table**: Dedicated counter table for efficient single-row locking per doctor-hospital-date
+2. **Row-Level Locking**: Uses PostgreSQL `FOR UPDATE` to lock the counter row during operations
+3. **Transaction Isolation**: Uses `ReadCommitted` isolation level with execution strategy for retry logic
+4. **Repository Pattern**: Clean separation between business logic and data access
+5. **Global Exception Handling**: Middleware-based consistent error responses
+6. **.NET Aspire**: Service discovery, health checks, and orchestration
 
-## ?? Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- Using .NET Aspire orchestration
-- Docker installed
 - .NET 9 SDK
-- Visual Studio 2022 or VS Code with C# extension
+- Docker Desktop (running)
+- Visual Studio 2022 or VS Code with C# Dev Kit
 
-### Application Setup
+### Running the Application
 
-1. **Clone/Open the repository**
-2. **Install docker & keep it running**
-3. **Run the aspire app**
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/gitcseme/DoctorAppointmentSystem
+   cd DoctorAppointmentSystem
+   ```
 
+2. **Ensure Docker is running**
 
-5. **Access Swagger UI**:
-- Open browser: `https://localhost:5001` or `http://localhost:5000`
-   - Swagger documentation will be available at the root URL
+3. **Run the .NET Aspire AppHost**
+   ```bash
+   dotnet run --project src/DoctorAppointmentSystem.AppHost
+   ```
+   
+   Or run from Visual Studio by setting `DoctorAppointmentSystem.AppHost` as the startup project.
 
-## ?? Database Schema
+4. **Access the application**
+   - **Aspire Dashboard**: Opens automatically (monitors all services)
+   - **API Swagger UI**: Check Aspire dashboard for the API service endpoint
+   - **Health Check**: `GET /health` endpoint
+
+The application will automatically:
+- Start PostgreSQL in a container
+- Apply database migrations
+- Configure connection strings
+- Start the API service
+
+## Database Schema
 
 ### Core Tables
 
-- **doctors**: Doctor information (name, specialization, contact)
-- **hospitals**: Hospital information (name, location, contact)
+- **doctors**: Doctor information (name, specialization, email, phone)
+- **hospitals**: Hospital information (name, address, city, phone)
 - **doctor_hospitals**: Many-to-many relationship with `daily_patient_limit`
-- **patients**: Patient information
+- **patients**: Patient information (name, email, phone, DOB, address)
 - **appointments**: Appointments with `serial_number` per doctor/hospital/date
+- **appointment_counters**: ⚡ **Optimized counter table** for tracking serials and counts
+
+### AppointmentCounter Table (Key Innovation)
+
+The `appointment_counters` table enables **O(1) performance** by storing:
+
+```sql
+CREATE TABLE appointment_counters (
+    id SERIAL PRIMARY KEY,
+    doctor_hospital_id INT NOT NULL,
+    appointment_date DATE NOT NULL,
+    current_serial INT NOT NULL DEFAULT 0,
+    appointment_count INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(doctor_hospital_id, appointment_date)
+);
+```
+
+**Benefits**:
+- Locks only **1 row** instead of N appointment rows
+- No `MAX(serial_number)` calculation needed
+- No `COUNT(*)` query needed
+- Constant-time performance regardless of appointment volume
 
 ### Key Constraints
 
 - Unique index on `(doctor_hospital_id, appointment_date, serial_number)`
 - Unique index on `(doctor_hospital_id, patient_id, appointment_date)` - prevents duplicate bookings
-- Foreign keys with appropriate delete behaviors
+- Unique index on `(doctor_hospital_id, appointment_date)` in counter table
+- Foreign keys with appropriate cascade/restrict behaviors
 
-## ?? API Endpoints
+## ⚡ Concurrency Handling
 
-### Doctors
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/doctors` | Create a new doctor |
-| GET | `/api/doctors` | Get all doctors |
-| GET | `/api/doctors/{id}` | Get doctor by ID |
-| POST | `/api/doctors/assign-to-hospital` | Assign doctor to hospital |
-| GET | `/api/doctors/{doctorId}/hospitals/{hospitalId}` | Get doctor-hospital details |
-
-### Hospitals
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/hospitals` | Create a new hospital |
-| GET | `/api/hospitals` | Get all hospitals |
-| GET | `/api/hospitals/{id}` | Get hospital by ID |
-| GET | `/api/hospitals/{id}/doctors` | Get all doctors at hospital |
-
-### Patients
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/patients` | Create a new patient |
-| GET | `/api/patients` | Get all patients |
-| GET | `/api/patients/{id}` | Get patient by ID |
-
-### Appointments
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/appointments` | Book a new appointment |
-| GET | `/api/appointments/{id}` | Get appointment by ID |
-| GET | `/api/appointments?doctorId={id}&hospitalId={id}&date={date}` | Get appointments by doctor/hospital/date |
-| GET | `/api/appointments/doctor/{doctorId}/hospital/{hospitalId}/date/{date}` | Alternative route for appointments |
-
-### Health Check
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Check API and database health |
-
-## ?? Example Usage
-
-### 1. Create a Doctor
-
-```bash
-POST /api/doctors
-Content-Type: application/json
-
-{
-  "name": "Dr. John Smith",
-  "specialization": "Cardiology",
-  "email": "john.smith@example.com",
-  "phoneNumber": "+1234567890"
-}
-```
-
-### 2. Create a Hospital
-
-```bash
-POST /api/hospitals
-Content-Type: application/json
-
-{
-  "name": "City General Hospital",
-  "address": "123 Main St",
-  "city": "New York",
-  "phoneNumber": "+1234567891"
-}
-```
-
-### 3. Assign Doctor to Hospital
-
-```bash
-POST /api/doctors/assign-to-hospital
-Content-Type: application/json
-
-{
-  "doctorId": 1,
-  "hospitalId": 1,
-  "dailyPatientLimit": 20
-}
-```
-
-### 4. Create a Patient
-
-```bash
-POST /api/patients
-Content-Type: application/json
-
-{
-  "name": "Jane Doe",
-  "email": "jane.doe@example.com",
-  "phoneNumber": "+1234567892",
-  "dateOfBirth": "1990-05-15T00:00:00",
-  "address": "456 Oak Ave"
-}
-```
-
-### 5. Book an Appointment
-
-```bash
-POST /api/appointments
-Content-Type: application/json
-
-{
-  "doctorId": 1,
-  "hospitalId": 1,
-  "patientId": 1,
-  "appointmentDate": "2025-11-05",
-  "notes": "Regular checkup"
-}
-```
-
-**Response**:
-```json
-{
-  "id": 1,
-  "doctor": {
-    "id": 1,
-    "name": "Dr. John Smith",
-  "specialization": "Cardiology"
-  },
-  "hospital": {
-    "id": 1,
-    "name": "City General Hospital",
-    "city": "New York"
-  },
-  "patient": {
-    "id": 1,
-    "name": "Jane Doe",
-    "email": "jane.doe@example.com",
-    "phoneNumber": "+1234567892"
-  },
-  "appointmentDate": "2025-11-05",
-  "serialNumber": 1,
-  "status": 1,
-  "notes": "Regular checkup",
-  "createdAt": "2025-11-01T10:30:00Z"
-}
-```
-
-## ?? Concurrency Handling
-
-### How It Works
+### How It Works (Optimized)
 
 When multiple requests try to book appointments simultaneously:
 
-1. **Lock Acquisition**: The system acquires a row-level lock on the `doctor_hospitals` record
-2. **Count Check**: Counts existing appointments (excluding cancelled) for the day
-3. **Limit Validation**: Rejects if daily limit is reached
-4. **Serial Assignment**: Calculates next serial number (`MAX(serial) + 1`)
-5. **Atomic Insert**: Creates appointment with the serial number
-6. **Transaction Commit**: Releases the lock
+1. **Lock Counter Row**: Acquires `FOR UPDATE` lock on single counter row for doctor-hospital-date
+2. **Get/Create Counter**: If first appointment of the day, creates counter row
+3. **Check Daily Limit**: Validates `appointment_count < daily_patient_limit`
+4. **Atomic Increment**: Increments both `current_serial` and `appointment_count`
+5. **Create Appointment**: Inserts appointment with the new serial number
+6. **Commit Transaction**: Releases the lock
 
 ### Race Condition Prevention
 
-- Uses PostgreSQL `FOR UPDATE` to lock rows
-- Transaction isolation ensures consistency
-- Unique constraints prevent duplicate serials
-- Retry logic handles transient failures
+- PostgreSQL `FOR UPDATE` provides pessimistic locking
+- Transaction isolation ensures ACID compliance
+- Unique constraints prevent duplicate serials at database level
+- Execution strategy handles transient failures with automatic retry
+- Counter table grows by only 1 row per doctor-hospital-date (minimal overhead)
 
-## ?? Testing Concurrency
-
-You can test concurrent bookings using tools like Apache JMeter, k6, or simple scripts:
-
-```bash
-# Install Apache Bench (if not installed)
-# Windows: via Apache HTTP Server
-# Mac: pre-installed
-# Linux: sudo apt-get install apache2-utils
-
-# Send 50 concurrent requests
-ab -n 50 -c 50 -p appointment.json -T application/json https://localhost:5001/api/appointments
-```
-
-**Expected Behavior**:
-- First N requests (up to daily limit) succeed with sequential serials
-- Remaining requests receive 409 Conflict with "Daily limit reached" message
-
-## ?? Error Responses
+### Standard HTTP Status Codes
 
 | Status Code | Scenario |
 |-------------|----------|
 | 200 OK | Successful GET request |
-| 201 Created | Resource created successfully |
+| 201 Created | Appointment created successfully |
 | 400 Bad Request | Invalid request data |
-| 404 Not Found | Resource not found |
-| 409 Conflict | Daily limit reached or duplicate booking |
+| 404 Not Found | Resource not found (doctor, hospital, patient) |
+| 409 Conflict | Daily limit reached or duplicate booking attempt |
 | 500 Internal Server Error | Unexpected server error |
+| 503 Service Unavailable | Health check failure (database disconnected) |
 
-## ??? Configuration
+## 🔧 Configuration
 
-### Application Settings
+### Connection String
 
-- **Connection String**: Configure in `appsettings.json`
-- **Logging Levels**: Adjust in `appsettings.json`
-- **CORS Policy**: Modify in `Program.cs` (currently allows all origins)
+The application uses .NET Aspire for service orchestration. Connection strings are automatically configured for:
+- PostgreSQL database (`appointments-db`)
+- Service discovery
+- Health checks
 
-### Environment-Specific Settings
+### Retry Policy
 
-- **Development**: `appsettings.Development.json`
-- **Production**: `appsettings.json` or environment variables
+EF Core is configured with retry logic:
+- Max retry count: 3
+- Max retry delay: 5 seconds
+- Handles transient PostgreSQL failures
 
-## ?? NuGet Packages
+### CORS
 
-### Core Layer
-- No external dependencies (pure domain model)
+Currently configured with `AllowAll` policy for development. Update in `Program.cs` for production:
 
-### Infrastructure Layer
-- `Npgsql.EntityFrameworkCore.PostgreSQL` (9.0.4)
-- `Microsoft.EntityFrameworkCore.Design` (9.0.10)
-
-### API Layer
-- `Swashbuckle.AspNetCore` (7.2.0)
-- `Microsoft.EntityFrameworkCore` (9.0.10)
-- `Microsoft.EntityFrameworkCore.Design` (9.0.10)
-- `Npgsql.EntityFrameworkCore.PostgreSQL` (9.0.4)
-
-## ?? Performance Considerations
+## 📊 Performance Considerations
 
 - **Connection Pooling**: Npgsql automatically pools connections
-- **Async/Await**: All database operations are asynchronous
-- **Indexing**: Strategic indexes on frequently queried columns
-- **Transaction Scope**: Transactions are kept as short as possible
+- **Async/Await**: All database operations are fully asynchronous
+- **Strategic Indexing**: Indexes on foreign keys and unique constraints
+- **Minimal Lock Duration**: Transactions kept as short as possible
+- **O(1) Counter Operations**: Constant-time serial assignment regardless of scale
+- **Execution Strategy**: Automatic retry on transient failures
+- **Sensitive Data Logging**: Enabled only in Development mode
 
-## ?? Future Enhancements
+**Expected Behavior**:
+- First N requests (up to `daily_patient_limit`) succeed with sequential serials
+- Remaining requests receive `409 Conflict` with "Daily limit reached" message
+- All successful appointments have unique, sequential serial numbers (no gaps or duplicates)
 
-- [ ] Appointment cancellation endpoint
-- [ ] Appointment status update (Completed, No-Show)
+## 🏗️ Project Structure
+
+```
+DoctorAppointmentSystem/ 
+├── src/
+│   ├── DoctorAppointmentSystem.Core/
+│   │   ├── Entities/ # Domain models (Doctor, Hospital, Appointment, AppointmentCounter)
+│   │   ├── Interfaces/  # Repository contracts
+│ │   ├── DTOs/  # API request/response models
+│   │   └── Exceptions/      # Custom exceptions
+│   ├── DoctorAppointmentSystem.Infrastructure/
+│   │   ├── Data/   # DbContext, EF Core configuration
+│   │   ├── Repositories/      # Repository implementations
+│   │   └── Migrations/     # EF Core migrations
+│   ├── DoctorAppointmentSystem.Api/
+│   │   ├── Controllers/       # API endpoints
+│   │   ├── Middleware/   # Global exception handler
+│   │   └── Extensions/        # Migration extensions
+│   ├── DoctorAppointmentSystem.AppHost/
+│   │   └── Program.cs         # .NET Aspire orchestration
+│   └── DoctorAppointmentSystem.ServiceDefaults/
+│       └── Extensions.cs      # Shared service configurations
+└── README.md
+```
+
+## 🔄 Database Migrations
+
+Migrations are automatically applied on application startup via `app.ApplyMigrations()` extension.
+
+### Health
+
+- `GET /health` - Health check (database connectivity)
+
+### Documentation
+
+- Swagger UI available at root (`/`) in Development mode
+
+## 🚧 Future Enhancements
+
+- [ ] Appointment cancellation endpoint (with counter decrement)
+- [ ] Appointment status updates (Completed, No-Show)
 - [ ] Doctor availability/schedule management
-- [ ] Notification system (email/SMS)
-- [ ] Authentication & Authorization (JWT)
-- [ ] Rate limiting
-- [ ] Caching layer (Redis)
+- [ ] Notification system (email/SMS for appointment reminders)
+- [ ] Authentication & Authorization (JWT/OAuth)
+- [ ] Rate limiting middleware
+- [ ] Caching layer (Redis for read-heavy operations)
 - [ ] Admin dashboard
+- [ ] Audit logging
+- [ ] Appointment rescheduling
 
-## ?? License
+## 📄 License
 
-This project is for educational/demonstration purposes.
-
-## ?? Contributing
-
-Contributions are welcome! Please ensure:
-- Code follows existing patterns
-- All tests pass
-- Documentation is updated
-
-## ?? Support
-
-For issues or questions, please open an issue in the repository.
+This project is available for educational and commercial use.
 
 ---
 
-**Built with ?? using .NET 9, PostgreSQL, and EF Core**
+**Built with ❤️ using .NET 9, PostgreSQL, EF Core, and .NET Aspire**
