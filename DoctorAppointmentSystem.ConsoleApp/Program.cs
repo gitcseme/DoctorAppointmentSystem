@@ -16,7 +16,11 @@ var services = new ServiceCollection();
 // Add DbContext
 var connectionString = configuration.GetConnectionString("DefaultConnection");
 services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+{
+    options.UseNpgsql(connectionString);
+    options.EnableSensitiveDataLogging();
+    options.EnableDetailedErrors();
+});
 
 // Add DataSeeder
 services.AddScoped<DataSeeder>();

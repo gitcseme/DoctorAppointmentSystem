@@ -27,7 +27,7 @@ public class DataSeeder
             Console.WriteLine($"Database already contains {existingHospitals} hospitals.");
             Console.Write("Do you want to clear existing data and reseed? (y/n): ");
             var response = Console.ReadLine()?.ToLower();
-            
+
             if (response != "y")
             {
                 Console.WriteLine("Seeding cancelled.");
@@ -39,7 +39,7 @@ public class DataSeeder
 
         await SeedHospitalsAndDoctorsAsync();
         await SeedPatientsAsync();
-        
+
         Console.WriteLine();
         Console.WriteLine("✓ Data seeding completed successfully!");
     }
@@ -47,7 +47,7 @@ public class DataSeeder
     private async Task ClearDataAsync()
     {
         Console.WriteLine("Clearing existing data...");
-        
+
         // Delete in correct order to respect foreign key constraints
         _context.Appointments.RemoveRange(_context.Appointments);
         _context.AppointmentCounters.RemoveRange(_context.AppointmentCounters);
@@ -55,7 +55,7 @@ public class DataSeeder
         _context.Doctors.RemoveRange(_context.Doctors);
         _context.Hospitals.RemoveRange(_context.Hospitals);
         _context.Patients.RemoveRange(_context.Patients);
-        
+
         await _context.SaveChangesAsync();
         Console.WriteLine("✓ Existing data cleared.");
         Console.WriteLine();
@@ -107,12 +107,12 @@ public class DataSeeder
         for (int i = 0; i < hospitalCount; i += batchSize)
         {
             var batchHospitals = hospitalFaker.Generate(Math.Min(batchSize, hospitalCount - i));
-            
+
             foreach (var hospital in batchHospitals)
             {
                 int doctorCount = _random.Next(minDoctorsPerHospital, maxDoctorsPerHospital + 1);
                 var batchDoctors = doctorFaker.Generate(doctorCount);
-                
+
                 // Ensure unique emails for doctors
                 for (int j = 0; j < batchDoctors.Count; j++)
                 {
@@ -153,12 +153,12 @@ public class DataSeeder
         Console.WriteLine("Creating doctor-hospital associations...");
         var hospitals = await _context.Hospitals.ToListAsync();
         var doctors = await _context.Doctors.ToListAsync();
-        
+
         int doctorIndex = 0;
         foreach (var hospital in hospitals)
         {
             int doctorCount = _random.Next(minDoctorsPerHospital, maxDoctorsPerHospital + 1);
-            
+
             for (int i = 0; i < doctorCount && doctorIndex < doctors.Count; i++, doctorIndex++)
             {
                 var doctorHospital = new DoctorHospital
@@ -168,7 +168,7 @@ public class DataSeeder
                     DailyPatientLimit = _random.Next(30, 71), // Random limit between 10 and 50
                     CreatedAt = DateTime.UtcNow
                 };
-                
+
                 doctorHospitals.Add(doctorHospital);
             }
 
@@ -204,7 +204,7 @@ public class DataSeeder
             .RuleFor(p => p.Name, f => f.Name.FullName())
             .RuleFor(p => p.Email, (f, p) => f.Internet.Email(p.Name).ToLower())
             .RuleFor(p => p.PhoneNumber, f => f.Phone.PhoneNumber("###-###-####"))
-            .RuleFor(p => p.DateOfBirth, f => f.Date.Past(80, DateTime.Now.AddYears(-18))) // 18-98 years old
+            .RuleFor(p => p.DateOfBirth, f => f.Date.Past(80, DateTime.UtcNow.AddYears(-18))) // 18-98 years old
             .RuleFor(p => p.Address, f => f.Address.FullAddress())
             .RuleFor(p => p.CreatedAt, f => DateTime.UtcNow);
 
@@ -235,14 +235,22 @@ public class DataSeeder
         Console.WriteLine();
         Console.WriteLine("Saving patients to database...");
 
-        // Save patients in batches
-        for (int i = 0; i < allPatients.Count; i += saveBatchSize)
+        try
         {
-            var batch = allPatients.Skip(i).Take(saveBatchSize).ToList();
-            await _context.Patients.AddRangeAsync(batch);
-            await _context.SaveChangesAsync();
-            Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allPatients.Count):N0}/{allPatients.Count:N0} patients saved...");
+            for (int i = 0; i < allPatients.Count; i += saveBatchSize)
+            {
+                var batch = allPatients.Skip(i).Take(saveBatchSize).ToList();
+                await _context.Patients.AddRangeAsync(batch);
+                await _context.SaveChangesAsync();
+                Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allPatients.Count):N0}/{allPatients.Count:N0} patients saved...");
+            }
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Error: {0}", ex.Message);
+            throw;
+        }
+        // Save patients in batches
 
         Console.WriteLine();
         Console.WriteLine($"✓ {allPatients.Count:N0} unique patients created.");
