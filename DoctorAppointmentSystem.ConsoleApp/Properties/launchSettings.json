@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "DoctorAppointmentSystem.ConsoleApp": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:3417;http://localhost:3418"
+    }
+  }
+}

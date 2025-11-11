@@ -37,7 +37,9 @@ public class DataSeeder
             await ClearDataAsync();
         }
 
-        await SeedHospitalsAndDoctorsAsync();
+        await SeedHospitalsAsync();
+        await SeedDoctorsAsync();
+        await SeedDoctorHospitalAssociationsAsync();
         await SeedPatientsAsync();
 
         Console.WriteLine();
@@ -61,13 +63,51 @@ public class DataSeeder
         Console.WriteLine();
     }
 
-    private async Task SeedHospitalsAndDoctorsAsync()
+    private async Task SeedHospitalsAsync()
     {
         const int hospitalCount = 500;
-        const int minDoctorsPerHospital = 30;
-        const int maxDoctorsPerHospital = 50;
+        Console.WriteLine($"Creating {hospitalCount} hospitals...");
+        Console.WriteLine();
 
-        Console.WriteLine($"Creating {hospitalCount} hospitals with {minDoctorsPerHospital}-{maxDoctorsPerHospital} doctors each...");
+        // Create Bogus faker for hospitals
+        var hospitalFaker = new Faker<Hospital>()
+            .RuleFor(h => h.Name, f => $"{f.Company.CompanyName()} {f.PickRandom("Hospital", "Medical Center", "Clinic", "Health Center")}")
+            .RuleFor(h => h.Address, f => f.Address.FullAddress())
+            .RuleFor(h => h.City, f => f.Address.City())
+            .RuleFor(h => h.PhoneNumber, f => f.Phone.PhoneNumber("###-###-####"))
+            .RuleFor(h => h.CreatedAt, f => DateTime.UtcNow);
+
+        var allHospitals = new List<Hospital>();
+
+        // Generate hospitals in batches
+        const int batchSize = 100;
+        for (int i = 0; i < hospitalCount; i += batchSize)
+        {
+            var batchCount = Math.Min(batchSize, hospitalCount - i);
+            var batchHospitals = hospitalFaker.Generate(batchCount);
+            allHospitals.AddRange(batchHospitals);
+            Console.Write($"\rProgress: {i + batchCount}/{hospitalCount} hospitals prepared...");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Saving hospitals to database...");
+
+        // Save hospitals in batches
+        await _context.Hospitals.AddRangeAsync(allHospitals);
+        await _context.SaveChangesAsync();
+
+        Console.WriteLine();
+        Console.WriteLine($"✓ {allHospitals.Count} hospitals created.");
+    }
+
+    private async Task SeedDoctorsAsync()
+    {
+        const int hospitalCount = 500;
+        const int doctorsPerHospital = 50; // Fixed 50 doctors per hospital
+        const int totalDoctors = hospitalCount * doctorsPerHospital; // 25,000 doctors
+
+        Console.WriteLine();
+        Console.WriteLine($"Creating {totalDoctors:N0} doctors ({doctorsPerHospital} per hospital)...");
         Console.WriteLine();
 
         // Medical specializations
@@ -81,14 +121,6 @@ public class DataSeeder
             "Family Medicine", "Internal Medicine", "Obstetrics", "Pathology"
         };
 
-        // Create Bogus faker for hospitals
-        var hospitalFaker = new Faker<Hospital>()
-            .RuleFor(h => h.Name, f => $"{f.Company.CompanyName()} {f.PickRandom("Hospital", "Medical Center", "Clinic", "Health Center")}")
-            .RuleFor(h => h.Address, f => f.Address.FullAddress())
-            .RuleFor(h => h.City, f => f.Address.City())
-            .RuleFor(h => h.PhoneNumber, f => f.Phone.PhoneNumber("###-###-####"))
-            .RuleFor(h => h.CreatedAt, f => DateTime.UtcNow);
-
         // Create Bogus faker for doctors
         var doctorFaker = new Faker<Doctor>()
             .RuleFor(d => d.Name, f => f.Name.FullName())
@@ -98,85 +130,78 @@ public class DataSeeder
             .RuleFor(d => d.CreatedAt, f => DateTime.UtcNow);
 
         var allDoctors = new List<Doctor>();
-        var doctorHospitals = new List<DoctorHospital>();
 
-        // Generate hospitals and doctors in batches for better performance
-        const int batchSize = 50;
-        int totalDoctorsCreated = 0;
-
-        for (int i = 0; i < hospitalCount; i += batchSize)
+        // Generate doctors in batches
+        const int generateBatchSize = 5000;
+        for (int i = 0; i < totalDoctors; i += generateBatchSize)
         {
-            var batchHospitals = hospitalFaker.Generate(Math.Min(batchSize, hospitalCount - i));
+            var batchCount = Math.Min(generateBatchSize, totalDoctors - i);
+            var batchDoctors = doctorFaker.Generate(batchCount);
 
-            foreach (var hospital in batchHospitals)
+            // Ensure unique emails for doctors
+            for (int j = 0; j < batchDoctors.Count; j++)
             {
-                int doctorCount = _random.Next(minDoctorsPerHospital, maxDoctorsPerHospital + 1);
-                var batchDoctors = doctorFaker.Generate(doctorCount);
-
-                // Ensure unique emails for doctors
-                for (int j = 0; j < batchDoctors.Count; j++)
-                {
-                    // Add timestamp and random number to ensure uniqueness
-                    var baseEmail = batchDoctors[j].Email.Split('@')[0];
-                    var domain = batchDoctors[j].Email.Split('@')[1];
-                    batchDoctors[j].Email = $"{baseEmail}.{DateTime.UtcNow.Ticks}.{_random.Next(1000, 9999)}@{domain}";
-                }
-
-                allDoctors.AddRange(batchDoctors);
-                totalDoctorsCreated += batchDoctors.Count;
-
-                // We'll create DoctorHospital associations after saving doctors and hospitals
-                Console.Write($"\rProgress: {i + batchHospitals.Count}/{hospitalCount} hospitals, {totalDoctorsCreated} doctors prepared...");
+                var baseEmail = batchDoctors[j].Email.Split('@')[0];
+                var domain = batchDoctors[j].Email.Split('@')[1];
+                batchDoctors[j].Email = $"{baseEmail}.{DateTime.UtcNow.Ticks}.{_random.Next(1000, 9999)}@{domain}";
             }
 
-            // Save hospitals in batches
-            await _context.Hospitals.AddRangeAsync(batchHospitals);
-            await _context.SaveChangesAsync();
+            allDoctors.AddRange(batchDoctors);
+            Console.Write($"\rProgress: {i + batchCount:N0}/{totalDoctors:N0} doctors prepared...");
         }
 
         Console.WriteLine();
-        Console.WriteLine($"✓ {hospitalCount} hospitals created.");
+        Console.WriteLine("Saving doctors to database...");
 
-        // Save all doctors in batches
-        Console.WriteLine($"Saving {allDoctors.Count} doctors...");
-        for (int i = 0; i < allDoctors.Count; i += 1000)
+        // Save doctors in batches
+        const int saveBatchSize = 1000;
+        for (int i = 0; i < allDoctors.Count; i += saveBatchSize)
         {
-            var batch = allDoctors.Skip(i).Take(1000).ToList();
+            var batch = allDoctors.Skip(i).Take(saveBatchSize).ToList();
             await _context.Doctors.AddRangeAsync(batch);
             await _context.SaveChangesAsync();
-            Console.Write($"\rProgress: {Math.Min(i + 1000, allDoctors.Count)}/{allDoctors.Count} doctors saved...");
+            Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allDoctors.Count):N0}/{allDoctors.Count:N0} doctors saved...");
         }
+
         Console.WriteLine();
-        Console.WriteLine($"✓ {allDoctors.Count} doctors created.");
+        Console.WriteLine($"✓ {allDoctors.Count:N0} doctors created.");
+    }
 
-        // Now create DoctorHospital associations
+    private async Task SeedDoctorHospitalAssociationsAsync()
+    {
+        const int doctorsPerHospital = 50;
+        Console.WriteLine();
         Console.WriteLine("Creating doctor-hospital associations...");
-        var hospitals = await _context.Hospitals.ToListAsync();
-        var doctors = await _context.Doctors.ToListAsync();
+        Console.WriteLine();
 
+        var hospitals = await _context.Hospitals.OrderBy(h => h.Id).ToListAsync();
+        var doctors = await _context.Doctors.OrderBy(d => d.Id).ToListAsync();
+
+        var doctorHospitals = new List<DoctorHospital>();
         int doctorIndex = 0;
+
         foreach (var hospital in hospitals)
         {
-            int doctorCount = _random.Next(minDoctorsPerHospital, maxDoctorsPerHospital + 1);
-
-            for (int i = 0; i < doctorCount && doctorIndex < doctors.Count; i++, doctorIndex++)
+            // Assign exactly 50 doctors to each hospital
+            for (int i = 0; i < doctorsPerHospital && doctorIndex < doctors.Count; i++, doctorIndex++)
             {
                 var doctorHospital = new DoctorHospital
                 {
                     DoctorId = doctors[doctorIndex].Id,
                     HospitalId = hospital.Id,
-                    DailyPatientLimit = _random.Next(30, 71), // Random limit between 10 and 50
+                    DailyPatientLimit = 50, // Fixed daily limit for predictability
                     CreatedAt = DateTime.UtcNow
                 };
 
                 doctorHospitals.Add(doctorHospital);
             }
 
+            // Save in batches of 1000
             if (doctorHospitals.Count >= 1000)
             {
                 await _context.DoctorHospitals.AddRangeAsync(doctorHospitals);
                 await _context.SaveChangesAsync();
-                Console.Write($"\rProgress: {doctorIndex}/{doctors.Count} associations created...");
+                Console.Write($"\rProgress: {doctorIndex:N0}/{doctors.Count:N0} associations created...");
                 doctorHospitals.Clear();
             }
         }
@@ -189,7 +214,7 @@ public class DataSeeder
         }
 
         Console.WriteLine();
-        Console.WriteLine($"✓ {doctorIndex} doctor-hospital associations created.");
+        Console.WriteLine($"✓ {doctorIndex:N0} doctor-hospital associations created.");
     }
 
     private async Task SeedPatientsAsync()
@@ -222,7 +247,6 @@ public class DataSeeder
             // Ensure unique emails for patients
             for (int j = 0; j < batchPatients.Count; j++)
             {
-                // Add timestamp and random number to ensure uniqueness
                 var baseEmail = batchPatients[j].Email.Split('@')[0];
                 var domain = batchPatients[j].Email.Split('@')[1];
                 batchPatients[j].Email = $"{baseEmail}.{DateTime.UtcNow.Ticks}.{_random.Next(1000, 9999)}@{domain}";
@@ -235,22 +259,13 @@ public class DataSeeder
         Console.WriteLine();
         Console.WriteLine("Saving patients to database...");
 
-        try
+        for (int i = 0; i < allPatients.Count; i += saveBatchSize)
         {
-            for (int i = 0; i < allPatients.Count; i += saveBatchSize)
-            {
-                var batch = allPatients.Skip(i).Take(saveBatchSize).ToList();
-                await _context.Patients.AddRangeAsync(batch);
-                await _context.SaveChangesAsync();
-                Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allPatients.Count):N0}/{allPatients.Count:N0} patients saved...");
-            }
+            var batch = allPatients.Skip(i).Take(saveBatchSize).ToList();
+            await _context.Patients.AddRangeAsync(batch);
+            await _context.SaveChangesAsync();
+            Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allPatients.Count):N0}/{allPatients.Count:N0} patients saved...");
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: {0}", ex.Message);
-            throw;
-        }
-        // Save patients in batches
 
         Console.WriteLine();
         Console.WriteLine($"✓ {allPatients.Count:N0} unique patients created.");
@@ -265,6 +280,9 @@ public class DataSeeder
         Console.WriteLine($"Total Doctor-Hospital Associations: {await _context.DoctorHospitals.CountAsync()}");
         Console.WriteLine($"Total Patients: {await _context.Patients.CountAsync()}");
         Console.WriteLine();
-
+        Console.WriteLine("=== Predictable Configuration ===");
+        Console.WriteLine("Doctors per Hospital: 50 (fixed)");
+        Console.WriteLine("Daily Patient Limit: 50 (fixed)");
+        Console.WriteLine();
     }
 }

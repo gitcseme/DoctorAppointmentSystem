@@ -47,7 +47,7 @@ public class AppointmentRepository : IAppointmentRepository
                 var counter = await _context.AppointmentCounters
                     .FromSqlRaw(@"
                      SELECT * FROM appointment_counters 
-                      WHERE doctor_hospital_id = {0} AND appointment_date = {1}
+                     WHERE doctor_hospital_id = {0} AND appointment_date = {1}
                      FOR UPDATE",
                         doctorHospitalId,
                         appointmentDate)
@@ -156,11 +156,11 @@ public class AppointmentRepository : IAppointmentRepository
     public async Task<object?> GetAppointmentByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Appointments
-            .Include(a => a.DoctorHospital)
-                .ThenInclude(dh => dh.Doctor)
-            .Include(a => a.DoctorHospital)
-                .ThenInclude(dh => dh.Hospital)
-            .Include(a => a.Patient)
+            //.Include(a => a.DoctorHospital)
+            //    .ThenInclude(dh => dh.Doctor)
+            //.Include(a => a.DoctorHospital)
+            //    .ThenInclude(dh => dh.Hospital)
+            //.Include(a => a.Patient)
             .Where(a => a.Id == id)
             .Select(a => new
             {
@@ -191,5 +191,14 @@ public class AppointmentRepository : IAppointmentRepository
                 a.CreatedAt
             })
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public Task<bool> CheckAppointmentExistsAsync(int patientId, int doctorHospitalId, DateOnly appointmentDate, CancellationToken cancellationToken = default)
+    {
+        return _context.Appointments.AnyAsync(a =>
+            a.PatientId == patientId &&
+            a.DoctorHospitalId == doctorHospitalId &&
+            a.AppointmentDate == appointmentDate,
+            cancellationToken);
     }
 }

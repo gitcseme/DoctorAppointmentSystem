@@ -36,21 +36,29 @@ public class AppointmentsController : ControllerBase
     {
         try
         {
-            // Validate patient exists
             var patient = await _patientRepository.GetByIdAsync(request.PatientId, cancellationToken);
-            if (patient == null)
+            if (patient is null)
             {
                 return NotFound(new { message = $"Patient with ID {request.PatientId} not found." });
             }
 
-            // Validate doctor-hospital association exists
             var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(request.DoctorId, request.HospitalId, cancellationToken);
             if (doctorHospital == null)
             {
                 return NotFound(new { message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}." });
             }
 
-            // Create the appointment with atomic serial number assignment
+            var isAppointmentExists = await _appointmentRepository.CheckAppointmentExistsAsync(
+                request.PatientId,
+                doctorHospital.Id,
+                request.AppointmentDate,
+                cancellationToken);
+
+            if (isAppointmentExists)
+            {
+                return Conflict(new { message = $"Appointment already exists for Patient ID {request.PatientId}, Doctor ID {request.DoctorId}, Hospital ID {request.HospitalId} on {request.AppointmentDate}." });
+            }
+
             var appointmentId = await _appointmentRepository.CreateAppointmentAsync(
                 doctorHospital.Id,
                 request.PatientId,

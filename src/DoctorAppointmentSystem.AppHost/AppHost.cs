@@ -5,6 +5,8 @@ var postgres = builder.AddPostgres("appointments-db")
     .WithPgAdmin();
 
 builder.AddProject<Projects.DoctorAppointmentSystem_Api>("doctorappointmentsystem-api")
-    .WithReference(postgres);
+    .WithReference(postgres)
+    .WaitFor(postgres);
+
 
 builder.Build().Run();
