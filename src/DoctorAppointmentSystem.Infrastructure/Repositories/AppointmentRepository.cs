@@ -156,11 +156,6 @@ public class AppointmentRepository : IAppointmentRepository
     public async Task<object?> GetAppointmentByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Appointments
-            //.Include(a => a.DoctorHospital)
-            //    .ThenInclude(dh => dh.Doctor)
-            //.Include(a => a.DoctorHospital)
-            //    .ThenInclude(dh => dh.Hospital)
-            //.Include(a => a.Patient)
             .Where(a => a.Id == id)
             .Select(a => new
             {

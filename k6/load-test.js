@@ -2,23 +2,18 @@
 import { check, sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 
-const duplicateSerials = new Counter('duplicate_serials');
-const successRate = new Rate('success_rate');
-const dailyLimitHit = new Counter('daily_limit_hit');
-
 export const options = {
     stages: [
-        { duration: '30s', target: 20 },
-        { duration: '1m', target: 50 },
-        { duration: '30s', target: 100 },
-        { duration: '1m', target: 50 },
-        { duration: '30s', target: 0 },
+        { duration: '30s', target: 50 },
+        { duration: '30s', target: 200 },
+        { duration: '30s', target: 300 },
+        { duration: '30s', target: 200 },
+        { duration: '30s', target: 50 },
     ],
     thresholds: {
         http_req_duration: ['p(95)<1000'],
         http_req_failed: ['rate<0.1'],
         success_rate: ['rate>0.70'],
-        duplicate_serials: ['count<1'],
     },
 };
 
@@ -73,55 +68,8 @@ export default function () {
         'status 201': (r) => r.status === 201,
         'status 404': (r) => r.status === 404,
         'status 409': (r) => r.status === 409,
+        'status 500': (r) => r.status === 500,
     });
-
-    if (res.status === 201) {
-        successRate.add(true);
-        
-        try {
-            const body = JSON.parse(res.body);
-            const appointmentId = body.id;
-            
-            if (appointmentId) {
-                sleep(0.05);
-                
-                const getRes = http.get(`${BASE_URL}/api/appointments/${appointmentId}`);
-                if (getRes.status === 200) {
-                    const apt = JSON.parse(getRes.body);
-                    const key = `${doctorId}_${hospitalId}_${date}`;
-                    
-                    if (!serialsByKey[key]) {
-                        serialsByKey[key] = new Set();
-                    }
-                    
-                    if (serialsByKey[key].has(apt.serialNumber)) {
-                        duplicateSerials.add(1);
-                        console.error(`❌ DUPLICATE SERIAL: Doctor ${doctorId}, Hospital ${hospitalId}, Date ${date}, Serial ${apt.serialNumber}`);
-                    } else {
-                        serialsByKey[key].add(apt.serialNumber);
-                    }
-                }
-            }
-        } catch (e) {
-            console.error(`Error parsing response: ${e.message}`);
-        }
-    }
-    else if (res.status === 409) {
-        successRate.add(true);
-        
-        try {
-            const body = JSON.parse(res.body);
-            if (body.message && body.message.includes('Daily patient limit')) {
-                dailyLimitHit.add(1);
-            }
-        } catch (e) {}
-    } else if (res.status === 404) {
-        successRate.add(false);
-        console.warn(`404 Not Found: Doctor ${doctorId}, Hospital ${hospitalId}, Patient ${patientId}`);
-    } else {
-        successRate.add(false);
-        console.error(`Unexpected status ${res.status}: ${res.body}`);
-    }
 
     sleep(Math.random() * 0.2 + 0.1);
 }

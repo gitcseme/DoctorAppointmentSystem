@@ -41,6 +41,7 @@ public class DataSeeder
         await SeedDoctorsAsync();
         await SeedDoctorHospitalAssociationsAsync();
         await SeedPatientsAsync();
+        await SeedAppointmentCountersAsync();
 
         Console.WriteLine();
         Console.WriteLine("✓ Data seeding completed successfully!");
@@ -284,5 +285,27 @@ public class DataSeeder
         Console.WriteLine("Doctors per Hospital: 50 (fixed)");
         Console.WriteLine("Daily Patient Limit: 50 (fixed)");
         Console.WriteLine();
+    }
+
+    private async Task SeedAppointmentCountersAsync()
+    {
+        Console.WriteLine("\nSeeding Appointment Counters For Tomorrow");
+        var doctorHospitals = await _context.DoctorHospitals.ToListAsync();
+        var appointmentCounters = new List<AppointmentCounter>();
+        foreach (var dh in doctorHospitals)
+        {
+            var counter = new AppointmentCounter
+            {
+                DoctorHospitalId = dh.Id,
+                AppointmentDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1)),
+                CurrentSerial = 0,
+                AppointmentCount = 0,
+                UpdatedAt = DateTime.UtcNow
+            };
+            appointmentCounters.Add(counter);
+        }
+        await _context.AppointmentCounters.AddRangeAsync(appointmentCounters);
+        await _context.SaveChangesAsync();
+        Console.WriteLine($"✓ {appointmentCounters.Count} AppointmentCounters created.");
     }
 }

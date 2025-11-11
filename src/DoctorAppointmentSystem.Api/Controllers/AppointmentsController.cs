@@ -23,10 +23,6 @@ public class AppointmentsController : ControllerBase
         _patientRepository = patientRepository;
     }
 
-    /// <summary>
-    /// Create a new appointment with automatic serial number assignment
-    /// Handles concurrent requests safely using database-level locking
-    /// </summary>
     [HttpPost]
     [ProducesResponseType(typeof(object), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -66,10 +62,7 @@ public class AppointmentsController : ControllerBase
                 request.Notes,
                 cancellationToken);
 
-            // Retrieve the created appointment
-            var appointment = await _appointmentRepository.GetAppointmentByIdAsync(appointmentId, cancellationToken);
-
-            return CreatedAtAction(nameof(GetAppointment), new { id = appointmentId }, appointment);
+            return CreatedAtAction(nameof(GetAppointment), new { id = appointmentId }, new { });
         }
         catch (DailyLimitReachedException ex)
         {
