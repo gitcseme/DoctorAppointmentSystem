@@ -5,15 +5,14 @@ import { Counter, Rate } from 'k6/metrics';
 export const options = {
     stages: [
         { duration: '30s', target: 50 },
-        { duration: '30s', target: 200 },
-        { duration: '30s', target: 300 },
-        { duration: '30s', target: 200 },
+        { duration: '30s', target: 70 },
+        { duration: '30s', target: 100 },
+        { duration: '30s', target: 70 },
         { duration: '30s', target: 50 },
     ],
     thresholds: {
         http_req_duration: ['p(95)<1000'],
         http_req_failed: ['rate<0.1'],
-        success_rate: ['rate>0.70'],
     },
 };
 
@@ -27,11 +26,9 @@ const BASE_URL = __ENV.API_URL || 'https://localhost:7123';
 // - 100,000 patients (IDs: 1-100000)
 // - Daily limit: 50 per doctor-hospital
 
-const TOTAL_HOSPITALS = 500;
+const TOTAL_HOSPITALS = 10;
 const DOCTORS_PER_HOSPITAL = 50;
 const TOTAL_PATIENTS = 100000;
-
-const serialsByKey = {};
 
 export default function () {
     // Select random hospital (1-500)

@@ -10,13 +10,13 @@ public class PatientRepository : IPatientRepository
     private readonly AppDbContext _context;
 
     public PatientRepository(AppDbContext context)
-  {
+    {
         _context = context;
     }
 
     public async Task<Patient> CreateAsync(Patient patient, CancellationToken cancellationToken = default)
     {
-  patient.CreatedAt = DateTime.UtcNow;
+        patient.CreatedAt = DateTime.UtcNow;
         _context.Patients.Add(patient);
         await _context.SaveChangesAsync(cancellationToken);
         return patient;
@@ -25,15 +25,21 @@ public class PatientRepository : IPatientRepository
     public async Task<Patient?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Patients
- .Include(p => p.Appointments)
+            .Include(p => p.Appointments)
             .ThenInclude(a => a.DoctorHospital)
             .ThenInclude(dh => dh.Doctor)
-     .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+            .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
     }
 
     public async Task<IEnumerable<Patient>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         return await _context.Patients
             .ToListAsync(cancellationToken);
+    }
+
+    public Task<bool> ExistsAsync(int patientId, CancellationToken cancellationToken)
+    {
+        return _context.Patients
+            .AnyAsync(p => p.Id == patientId, cancellationToken);
     }
 }

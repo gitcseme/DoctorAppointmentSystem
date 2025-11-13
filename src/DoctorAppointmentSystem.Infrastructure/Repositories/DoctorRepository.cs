@@ -25,9 +25,9 @@ public class DoctorRepository : IDoctorRepository
     public async Task<Doctor?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Doctors
-     .Include(d => d.DoctorHospitals)
-       .ThenInclude(dh => dh.Hospital)
-.FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
+            .Include(d => d.DoctorHospitals)
+            .ThenInclude(dh => dh.Hospital)
+            .FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
     }
 
     public async Task<IEnumerable<Doctor>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -41,8 +41,7 @@ public class DoctorRepository : IDoctorRepository
     public async Task<DoctorHospital?> GetDoctorHospitalAsync(int doctorId, int hospitalId, CancellationToken cancellationToken = default)
     {
         return await _context.DoctorHospitals
-            .Include(dh => dh.Doctor)
-            .Include(dh => dh.Hospital)
+            .AsNoTracking()
             .FirstOrDefaultAsync(dh => dh.DoctorId == doctorId && dh.HospitalId == hospitalId, cancellationToken);
     }
 
@@ -59,4 +58,6 @@ public class DoctorRepository : IDoctorRepository
         _context.DoctorHospitals.Add(doctorHospital);
         await _context.SaveChangesAsync(cancellationToken);
     }
+
+
 }
