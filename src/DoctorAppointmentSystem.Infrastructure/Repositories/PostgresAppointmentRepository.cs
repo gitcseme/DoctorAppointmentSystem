@@ -6,10 +6,6 @@ using DoctorAppointmentSystem.Infrastructure.Data;
 
 namespace DoctorAppointmentSystem.Infrastructure.Repositories;
 
-/// <summary>
-/// Repository that handles appointment creation with PostgreSQL row-level locking
-/// to ensure atomic serial number assignment and prevent race conditions
-/// </summary>
 public class PostgresAppointmentRepository : IAppointmentRepository
 {
     private readonly AppDbContext _context;
@@ -19,10 +15,6 @@ public class PostgresAppointmentRepository : IAppointmentRepository
         _context = context;
     }
 
-    /// <summary>
-    /// Creates an appointment with atomic serial number assignment using AppointmentCounter table
-    /// This prevents race conditions by locking only a single counter row per doctor-hospital-date
-    /// </summary>
     public async Task<int> CreateAppointmentAsync(
         DoctorHospital doctorHospital,
         int patientId,
@@ -42,8 +34,7 @@ public class PostgresAppointmentRepository : IAppointmentRepository
 
             try
             {
-                // 1. Lock and get the counter row for this doctor-hospital-date combination
-                // Using raw SQL with FOR UPDATE to acquire row-level lock
+                // 1. Using raw SQL with FOR UPDATE to acquire row-level lock
                 var counter = await _context.AppointmentCounters
                     .FromSqlRaw(@"
                      SELECT * FROM appointment_counters 
@@ -83,7 +74,6 @@ public class PostgresAppointmentRepository : IAppointmentRepository
                 _context.Appointments.Add(appointment);
                 await _context.SaveChangesAsync(cancellationToken);
 
-                // 7. Commit the transaction
                 await transaction.CommitAsync(cancellationToken);
 
                 return appointment.Id;
