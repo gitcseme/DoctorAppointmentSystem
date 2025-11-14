@@ -29,9 +29,9 @@ public class DoctorsController : ControllerBase
     {
         var doctor = new Doctor
         {
-       Name = request.Name,
- Specialization = request.Specialization,
- Email = request.Email,
+            Name = request.Name,
+            Specialization = request.Specialization,
+            Email = request.Email,
             PhoneNumber = request.PhoneNumber
         };
 
@@ -46,7 +46,7 @@ createdDoctor.Id,
         );
 
         return CreatedAtAction(nameof(GetDoctor), new { id = createdDoctor.Id }, response);
- }
+    }
 
     /// <summary>
     /// Get a doctor by ID
@@ -60,7 +60,7 @@ createdDoctor.Id,
 
         if (doctor == null)
         {
-     return NotFound(new { message = $"Doctor with ID {id} not found." });
+            return NotFound(new { message = $"Doctor with ID {id} not found." });
         }
 
         var response = new DoctorResponse(
@@ -71,25 +71,25 @@ createdDoctor.Id,
             doctor.PhoneNumber
    );
 
-     return Ok(response);
+        return Ok(response);
     }
 
     /// <summary>
     /// Get all doctors
     /// </summary>
-  [HttpGet]
+    [HttpGet]
     [ProducesResponseType(typeof(IEnumerable<DoctorResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IEnumerable<DoctorResponse>>> GetAllDoctors(CancellationToken cancellationToken)
     {
-      var doctors = await _doctorRepository.GetAllAsync(cancellationToken);
+        var doctors = await _doctorRepository.GetAllAsync(cancellationToken);
 
-    var response = doctors.Select(d => new DoctorResponse(
-       d.Id,
-            d.Name,
-         d.Specialization,
- d.Email,
-            d.PhoneNumber
- ));
+        var response = doctors.Select(d => new DoctorResponse(
+           d.Id,
+                d.Name,
+             d.Specialization,
+     d.Email,
+                d.PhoneNumber
+     ));
 
         return Ok(response);
     }
@@ -107,26 +107,26 @@ createdDoctor.Id,
         var doctor = await _doctorRepository.GetByIdAsync(request.DoctorId, cancellationToken);
         if (doctor == null)
         {
-       return NotFound(new { message = $"Doctor with ID {request.DoctorId} not found." });
+            return NotFound(new { message = $"Doctor with ID {request.DoctorId} not found." });
         }
 
         // Validate hospital exists
         var hospital = await _hospitalRepository.GetByIdAsync(request.HospitalId, cancellationToken);
-      if (hospital == null)
+        if (hospital == null)
         {
-  return NotFound(new { message = $"Hospital with ID {request.HospitalId} not found." });
+            return NotFound(new { message = $"Hospital with ID {request.HospitalId} not found." });
         }
 
         // Check if already assigned
         var existing = await _doctorRepository.GetDoctorHospitalAsync(request.DoctorId, request.HospitalId, cancellationToken);
-     if (existing != null)
-     {
-   return BadRequest(new { message = "Doctor is already assigned to this hospital." });
-   }
+        if (existing != null)
+        {
+            return BadRequest(new { message = "Doctor is already assigned to this hospital." });
+        }
 
         await _doctorRepository.AssignToHospitalAsync(request.DoctorId, request.HospitalId, request.DailyPatientLimit, cancellationToken);
 
-  return Ok(new { message = "Doctor successfully assigned to hospital." });
+        return Ok(new { message = "Doctor successfully assigned to hospital." });
     }
 
     /// <summary>
@@ -137,30 +137,31 @@ createdDoctor.Id,
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult> GetDoctorHospital(int doctorId, int hospitalId, CancellationToken cancellationToken)
     {
+        // TODO: re-write method to get all data
         var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(doctorId, hospitalId, cancellationToken);
 
         if (doctorHospital == null)
         {
-         return NotFound(new { message = "Doctor-Hospital association not found." });
+            return NotFound(new { message = "Doctor-Hospital association not found." });
         }
 
-  return Ok(new
-    {
+        return Ok(new
+        {
             doctorHospital.Id,
-    Doctor = new
-      {
-           doctorHospital.Doctor.Id,
-    doctorHospital.Doctor.Name,
-     doctorHospital.Doctor.Specialization
+            Doctor = new
+            {
+                doctorHospital.Doctor.Id,
+                doctorHospital.Doctor.Name,
+                doctorHospital.Doctor.Specialization
             },
             Hospital = new
-       {
-           doctorHospital.Hospital.Id,
-          doctorHospital.Hospital.Name,
-             doctorHospital.Hospital.City
-        },
+            {
+                doctorHospital.Hospital.Id,
+                doctorHospital.Hospital.Name,
+                doctorHospital.Hospital.City
+            },
             doctorHospital.DailyPatientLimit,
-    doctorHospital.CreatedAt
-      });
-  }
+            doctorHospital.CreatedAt
+        });
+    }
 }

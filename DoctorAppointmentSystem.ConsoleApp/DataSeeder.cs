@@ -10,6 +10,9 @@ public class DataSeeder
     private readonly AppDbContext _context;
     private readonly Random _random = new();
 
+    private const int HospitalsToCreate = 10;
+    private const int DoctorsPerHospital = 50;
+
     public DataSeeder(AppDbContext context)
     {
         _context = context;
@@ -41,7 +44,9 @@ public class DataSeeder
         await SeedDoctorsAsync();
         await SeedDoctorHospitalAssociationsAsync();
         await SeedPatientsAsync();
-        await SeedAppointmentCountersAsync();
+
+        // Postgres row-level locking needs appointment counters to be seeded
+        // await SeedAppointmentCountersAsync();
 
         Console.WriteLine();
         Console.WriteLine("✓ Data seeding completed successfully!");
@@ -66,9 +71,7 @@ public class DataSeeder
 
     private async Task SeedHospitalsAsync()
     {
-        const int hospitalCount = 500;
-        Console.WriteLine($"Creating {hospitalCount} hospitals...");
-        Console.WriteLine();
+        Console.WriteLine($"Creating {HospitalsToCreate} hospitals...");
 
         // Create Bogus faker for hospitals
         var hospitalFaker = new Faker<Hospital>()
@@ -78,38 +81,21 @@ public class DataSeeder
             .RuleFor(h => h.PhoneNumber, f => f.Phone.PhoneNumber("###-###-####"))
             .RuleFor(h => h.CreatedAt, f => DateTime.UtcNow);
 
-        var allHospitals = new List<Hospital>();
-
-        // Generate hospitals in batches
-        const int batchSize = 100;
-        for (int i = 0; i < hospitalCount; i += batchSize)
-        {
-            var batchCount = Math.Min(batchSize, hospitalCount - i);
-            var batchHospitals = hospitalFaker.Generate(batchCount);
-            allHospitals.AddRange(batchHospitals);
-            Console.Write($"\rProgress: {i + batchCount}/{hospitalCount} hospitals prepared...");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine("Saving hospitals to database...");
+        var hospitals = hospitalFaker.Generate(HospitalsToCreate);
 
         // Save hospitals in batches
-        await _context.Hospitals.AddRangeAsync(allHospitals);
+        await _context.Hospitals.AddRangeAsync(hospitals);
         await _context.SaveChangesAsync();
 
-        Console.WriteLine();
-        Console.WriteLine($"✓ {allHospitals.Count} hospitals created.");
+        Console.WriteLine($"✓ {hospitals.Count} hospitals created.");
     }
 
     private async Task SeedDoctorsAsync()
     {
-        const int hospitalCount = 500;
-        const int doctorsPerHospital = 50; // Fixed 50 doctors per hospital
-        const int totalDoctors = hospitalCount * doctorsPerHospital; // 25,000 doctors
+        const int totalDoctors = HospitalsToCreate * DoctorsPerHospital; // 500
 
         Console.WriteLine();
-        Console.WriteLine($"Creating {totalDoctors:N0} doctors ({doctorsPerHospital} per hospital)...");
-        Console.WriteLine();
+        Console.WriteLine($"Creating {totalDoctors:N0} doctors ({DoctorsPerHospital} per hospital)...");
 
         // Medical specializations
         var specializations = new[]
@@ -130,50 +116,17 @@ public class DataSeeder
             .RuleFor(d => d.PhoneNumber, f => f.Phone.PhoneNumber("###-###-####"))
             .RuleFor(d => d.CreatedAt, f => DateTime.UtcNow);
 
-        var allDoctors = new List<Doctor>();
+        var doctors = doctorFaker.Generate(totalDoctors);
+        await _context.Doctors.AddRangeAsync(doctors);
+        await _context.SaveChangesAsync();
 
-        // Generate doctors in batches
-        const int generateBatchSize = 5000;
-        for (int i = 0; i < totalDoctors; i += generateBatchSize)
-        {
-            var batchCount = Math.Min(generateBatchSize, totalDoctors - i);
-            var batchDoctors = doctorFaker.Generate(batchCount);
-
-            // Ensure unique emails for doctors
-            for (int j = 0; j < batchDoctors.Count; j++)
-            {
-                var baseEmail = batchDoctors[j].Email.Split('@')[0];
-                var domain = batchDoctors[j].Email.Split('@')[1];
-                batchDoctors[j].Email = $"{baseEmail}.{DateTime.UtcNow.Ticks}.{_random.Next(1000, 9999)}@{domain}";
-            }
-
-            allDoctors.AddRange(batchDoctors);
-            Console.Write($"\rProgress: {i + batchCount:N0}/{totalDoctors:N0} doctors prepared...");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine("Saving doctors to database...");
-
-        // Save doctors in batches
-        const int saveBatchSize = 1000;
-        for (int i = 0; i < allDoctors.Count; i += saveBatchSize)
-        {
-            var batch = allDoctors.Skip(i).Take(saveBatchSize).ToList();
-            await _context.Doctors.AddRangeAsync(batch);
-            await _context.SaveChangesAsync();
-            Console.Write($"\rProgress: {Math.Min(i + saveBatchSize, allDoctors.Count):N0}/{allDoctors.Count:N0} doctors saved...");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine($"✓ {allDoctors.Count:N0} doctors created.");
+        Console.WriteLine($"✓ {doctors.Count:N0} doctors created.");
     }
 
     private async Task SeedDoctorHospitalAssociationsAsync()
     {
-        const int doctorsPerHospital = 50;
         Console.WriteLine();
         Console.WriteLine("Creating doctor-hospital associations...");
-        Console.WriteLine();
 
         var hospitals = await _context.Hospitals.OrderBy(h => h.Id).ToListAsync();
         var doctors = await _context.Doctors.OrderBy(d => d.Id).ToListAsync();
@@ -184,7 +137,7 @@ public class DataSeeder
         foreach (var hospital in hospitals)
         {
             // Assign exactly 50 doctors to each hospital
-            for (int i = 0; i < doctorsPerHospital && doctorIndex < doctors.Count; i++, doctorIndex++)
+            for (int i = 0; i < DoctorsPerHospital && doctorIndex < doctors.Count; i++, doctorIndex++)
             {
                 var doctorHospital = new DoctorHospital
                 {
@@ -282,7 +235,7 @@ public class DataSeeder
         Console.WriteLine($"Total Patients: {await _context.Patients.CountAsync()}");
         Console.WriteLine();
         Console.WriteLine("=== Predictable Configuration ===");
-        Console.WriteLine("Doctors per Hospital: 50 (fixed)");
+        Console.WriteLine($"Doctors per Hospital: {DoctorsPerHospital} (fixed)");
         Console.WriteLine("Daily Patient Limit: 50 (fixed)");
         Console.WriteLine();
     }

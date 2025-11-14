@@ -1,13 +1,34 @@
-using Microsoft.EntityFrameworkCore;
+using DoctorAppointmentSystem.Api.Extensions;
+using DoctorAppointmentSystem.Api.Middleware;
 using DoctorAppointmentSystem.Core.Interfaces;
+using DoctorAppointmentSystem.Core.Shared;
 using DoctorAppointmentSystem.Infrastructure.Data;
 using DoctorAppointmentSystem.Infrastructure.Repositories;
-using DoctorAppointmentSystem.Api.Middleware;
-using DoctorAppointmentSystem.Api.Extensions;
+using DoctorAppointmentSystem.Infrastructure.Services;
+using Medallion.Threading;
+using Medallion.Threading.Redis;
+using Microsoft.EntityFrameworkCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
+
+// Add Redis connection from Aspire
+builder.AddRedisClient("redis");
+
+builder.Services.AddSingleton<IDistributedLockProvider>(sp =>
+{
+    var connectionMultiplexer = sp.GetRequiredService<IConnectionMultiplexer>();
+    return new RedisDistributedSynchronizationProvider(connectionMultiplexer.GetDatabase());
+});
+
+// Register IDistributedCache using Redis
+builder.Services.AddStackExchangeRedisCache(redisOpt =>
+{
+    var redis = builder.Configuration.GetConnectionString("redis");
+    redisOpt.Configuration = redis;
+});
 
 builder.Services.AddControllers();
 
@@ -24,11 +45,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.EnableSensitiveDataLogging(builder.Environment.IsDevelopment());
 });
 
+// Register Redis serial number service
+builder.Services.AddSingleton<IRedisSerialNumberService, RedisSerialNumberService>();
+
 // Register repositories
 builder.Services.AddScoped<IDoctorRepository, DoctorRepository>();
 builder.Services.AddScoped<IHospitalRepository, HospitalRepository>();
 builder.Services.AddScoped<IPatientRepository, PatientRepository>();
-builder.Services.AddScoped<IAppointmentRepository, AppointmentRepository>();
+
+builder.Services.AddKeyedScoped<IAppointmentRepository, RedisAppointmentRepository>(AppointmentProviders.Redis);
+builder.Services.AddKeyedScoped<IAppointmentRepository, PostgresAppointmentRepository>(AppointmentProviders.Postgres);
 
 // Add API documentation
 builder.Services.AddEndpointsApiExplorer();
@@ -38,7 +64,7 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "Doctor Appointment System API",
         Version = "v1",
-        Description = "Production-ready API for managing doctor appointments with PostgreSQL and concurrency control",
+        Description = "Production-ready API with Redis distributed locking for atomic serial number assignment across multiple instances",
         Contact = new Microsoft.OpenApi.Models.OpenApiContact
         {
             Name = "API Support",
@@ -95,14 +121,15 @@ app.MapGet("/health", async (AppDbContext dbContext) =>
         {
             status = "Healthy",
             timestamp = DateTime.UtcNow,
-            database = "Connected"
+            database = "Connected",
+            redis = "Enabled"
         });
     }
     catch (Exception ex)
     {
         return Results.Problem(
             title: "Unhealthy",
-            detail: $"Database connection failed: {ex.Message}",
+            detail: $"Health check failed: {ex.Message}",
             statusCode: 503
         );
     }

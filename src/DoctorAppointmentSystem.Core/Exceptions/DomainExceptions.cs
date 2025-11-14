@@ -27,3 +27,10 @@ public class EntityNotFoundException : Exception
     {
     }
 }
+
+public class AppointmentCreationFailedException : AppointmentException
+{
+    public AppointmentCreationFailedException(string message) : base(message)
+    {
+    }
+}

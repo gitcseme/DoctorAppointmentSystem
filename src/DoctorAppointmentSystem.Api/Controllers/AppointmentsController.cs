@@ -2,6 +2,10 @@ using Microsoft.AspNetCore.Mvc;
 using DoctorAppointmentSystem.Core.DTOs;
 using DoctorAppointmentSystem.Core.Interfaces;
 using DoctorAppointmentSystem.Core.Exceptions;
+using DoctorAppointmentSystem.Core.Shared;
+using Microsoft.Extensions.Caching.Distributed;
+using DoctorAppointmentSystem.Core.Entities;
+using DoctorAppointmentSystem.Infrastructure.Extensions;
 
 namespace DoctorAppointmentSystem.Api.Controllers;
 
@@ -12,15 +16,18 @@ public class AppointmentsController : ControllerBase
     private readonly IAppointmentRepository _appointmentRepository;
     private readonly IDoctorRepository _doctorRepository;
     private readonly IPatientRepository _patientRepository;
+    private readonly IDistributedCache _cache;
 
     public AppointmentsController(
-        IAppointmentRepository appointmentRepository,
+        [FromKeyedServices(AppointmentProviders.Redis)] IAppointmentRepository appointmentRepository,
         IDoctorRepository doctorRepository,
-        IPatientRepository patientRepository)
+        IPatientRepository patientRepository,
+        IDistributedCache cache)
     {
         _appointmentRepository = appointmentRepository;
         _doctorRepository = doctorRepository;
         _patientRepository = patientRepository;
+        _cache = cache;
     }
 
     [HttpPost]
@@ -32,14 +39,22 @@ public class AppointmentsController : ControllerBase
     {
         try
         {
-            var patient = await _patientRepository.GetByIdAsync(request.PatientId, cancellationToken);
-            if (patient is null)
+            var isPatientExists = await _patientRepository.ExistsAsync(request.PatientId, cancellationToken);
+            if (!isPatientExists)
             {
                 return NotFound(new { message = $"Patient with ID {request.PatientId} not found." });
             }
 
-            var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(request.DoctorId, request.HospitalId, cancellationToken);
-            if (doctorHospital == null)
+            var doctorHospitalCacheKey = $"doctor-hospital-{request.DoctorId}-{request.HospitalId}";
+            var doctorHospital = await _cache.GetOrCreateAsync(doctorHospitalCacheKey, async cacheOpt =>
+            {
+                cacheOpt.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);
+                cacheOpt.SlidingExpiration = TimeSpan.FromMinutes(5);
+
+                return await _doctorRepository.GetDoctorHospitalAsync(request.DoctorId, request.HospitalId, cancellationToken);
+            });
+
+            if (doctorHospital is null)
             {
                 return NotFound(new { message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}." });
             }
@@ -56,7 +71,7 @@ public class AppointmentsController : ControllerBase
             }
 
             var appointmentId = await _appointmentRepository.CreateAppointmentAsync(
-                doctorHospital.Id,
+                doctorHospital,
                 request.PatientId,
                 request.AppointmentDate,
                 request.Notes,
