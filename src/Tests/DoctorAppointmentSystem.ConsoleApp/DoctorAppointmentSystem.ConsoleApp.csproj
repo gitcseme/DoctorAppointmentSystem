@@ -20,8 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\src\DoctorAppointmentSystem.Core\DoctorAppointmentSystem.Core.csproj" />
-    <ProjectReference Include="..\src\DoctorAppointmentSystem.Infrastructure\DoctorAppointmentSystem.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\DoctorAppointmentSystem.Core\DoctorAppointmentSystem.Core.csproj" />
+    <ProjectReference Include="..\..\DoctorAppointmentSystem.Infrastructure\DoctorAppointmentSystem.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
