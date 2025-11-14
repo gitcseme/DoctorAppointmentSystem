@@ -9,10 +9,8 @@ public class RedisSerialNumberService : IRedisSerialNumberService
     private readonly IDatabase _db;
     private readonly IDistributedLockProvider _distributedLockProvider;
     
-    // Lock configuration
-    private static readonly TimeSpan MaxWaitTime = TimeSpan.FromSeconds(30); // Max time to wait in queue
+    private static readonly TimeSpan MaxWaitTime = TimeSpan.FromSeconds(30);
     
-    // Redis key prefixes
     private const string CounterKeyPrefix = "appt:serial";
     private const string LockKeyPrefix = "appt:lock";
 
@@ -31,8 +29,7 @@ public class RedisSerialNumberService : IRedisSerialNumberService
         var lockKey = GetLockKey(doctorHospitalId, appointmentDate);
         var counterKey = GetCounterKey(doctorHospitalId, appointmentDate);
 
-        // Try to acquire lock with timeout (QUEUING behavior)
-        // If lock is held by another instance, this will WAIT/QUEUE until available or timeout
+        // Subsequent requests will wait in queue for the lock
         await using var acquiredLock = await _distributedLockProvider.TryAcquireLockAsync(lockKey, 
             MaxWaitTime,
             cancellationToken);
@@ -47,15 +44,12 @@ public class RedisSerialNumberService : IRedisSerialNumberService
         {
             var newSerial = await _db.StringIncrementAsync(counterKey);
 
-            // Check daily limit AFTER incrementing
             if (newSerial > dailyLimit)
             {
-                // Daily limit exceeded - decrement back
                 await _db.StringDecrementAsync(counterKey);
                 return null;
             }
 
-            // Set expiration to midnight of next day (auto-cleanup)
             var expiryTime = GetMidnightExpiry(appointmentDate);
             await _db.KeyExpireAsync(counterKey, expiryTime);
 
@@ -86,6 +80,8 @@ public class RedisSerialNumberService : IRedisSerialNumberService
         return $"{LockKeyPrefix}:{doctorHospitalId}:{appointmentDate:yyyy-MM-dd}";
     }
 
+
+    // Set expiration to midnight of next day (auto-cleanup)
     private static TimeSpan GetMidnightExpiry(DateOnly appointmentDate)
     {
         var midnight = appointmentDate.ToDateTime(TimeOnly.MinValue).AddDays(1);

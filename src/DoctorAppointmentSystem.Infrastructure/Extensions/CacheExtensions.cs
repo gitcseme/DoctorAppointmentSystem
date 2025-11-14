@@ -1,21 +1,23 @@
 ﻿using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
 
 namespace DoctorAppointmentSystem.Infrastructure.Extensions;
 
 public static class CacheExtensions
 {
-    public static T? GetOrCreate<T>(this IDistributedCache cache, string cacheKey, Func<DistributedCacheEntryOptions, T?> factory)
+    public static T? GetOrCreate<T>(this IDistributedCache cache, string cacheKey, 
+        Func<DistributedCacheEntryOptions, T?> factory)
     {
         var cachedData = cache.Get(cacheKey);
         if (cachedData != null)
         {
-            return System.Text.Json.JsonSerializer.Deserialize<T>(cachedData);
+            return JsonSerializer.Deserialize<T>(cachedData);
         }
 
         var options = new DistributedCacheEntryOptions();
 
         T? data = factory(options);
-        cache.SetString(cacheKey, System.Text.Json.JsonSerializer.Serialize(data), options);
+        cache.SetString(cacheKey, JsonSerializer.Serialize(data), options);
 
         return data;
     }
@@ -26,13 +28,13 @@ public static class CacheExtensions
         var cachedData = cache.Get(cacheKey);
         if (cachedData != null)
         {
-            return System.Text.Json.JsonSerializer.Deserialize<T>(cachedData);
+            return JsonSerializer.Deserialize<T>(cachedData);
         }
 
         var options = new DistributedCacheEntryOptions();
 
         T? data = await factory(options);
-        cache.SetString(cacheKey, System.Text.Json.JsonSerializer.Serialize(data), options);
+        cache.SetString(cacheKey, JsonSerializer.Serialize(data), options);
 
         return data;
     }
