@@ -2,10 +2,6 @@ using Microsoft.AspNetCore.Mvc;
 using DoctorAppointmentSystem.Core.DTOs;
 using DoctorAppointmentSystem.Core.Interfaces;
 using DoctorAppointmentSystem.Core.Exceptions;
-using DoctorAppointmentSystem.Core.Shared;
-using Microsoft.Extensions.Caching.Distributed;
-using DoctorAppointmentSystem.Core.Entities;
-using DoctorAppointmentSystem.Infrastructure.Extensions;
 
 namespace DoctorAppointmentSystem.Api.Controllers;
 
@@ -13,71 +9,103 @@ namespace DoctorAppointmentSystem.Api.Controllers;
 [Route("api/[controller]")]
 public class AppointmentsController : ControllerBase
 {
-    private readonly IAppointmentRepository _appointmentRepository;
+    private readonly IAppointmentWriteRepository _writeRepository;
+    private readonly IAppointmentReadRepository _readRepository;
     private readonly IDoctorRepository _doctorRepository;
     private readonly IPatientRepository _patientRepository;
-    private readonly IDistributedCache _cache;
+    private readonly IAppointmentStatusTracker _statusTracker;
 
     public AppointmentsController(
-        [FromKeyedServices(AppointmentProviders.Redis)] IAppointmentRepository appointmentRepository,
+        IAppointmentWriteRepository writeRepository,
+        IAppointmentReadRepository readRepository,
         IDoctorRepository doctorRepository,
         IPatientRepository patientRepository,
-        IDistributedCache cache)
+        IAppointmentStatusTracker statusTracker)
     {
-        _appointmentRepository = appointmentRepository;
+        _writeRepository = writeRepository;
+        _readRepository = readRepository;
         _doctorRepository = doctorRepository;
         _patientRepository = patientRepository;
-        _cache = cache;
+        _statusTracker = statusTracker;
     }
 
+    /// <summary>
+    /// Create a new appointment (queued for async processing via RabbitMQ)
+    /// Returns appointment reference for status tracking
+    /// </summary>
     [HttpPost]
-    [ProducesResponseType(typeof(object), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(object), StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<ActionResult> CreateAppointment([FromBody] CreateAppointmentRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult> CreateAppointment(
+        [FromBody] CreateAppointmentRequest request,
+        CancellationToken cancellationToken)
     {
         try
         {
-            var isPatientExists = await _patientRepository.ExistsAsync(request.PatientId, cancellationToken);
-            if (!isPatientExists)
+            // Validate patient exists
+            var patient = await _patientRepository.GetByIdAsync(request.PatientId, cancellationToken);
+            if (patient == null)
             {
                 return NotFound(new { message = $"Patient with ID {request.PatientId} not found." });
             }
 
-            var doctorHospitalCacheKey = $"doctor-hospital-{request.DoctorId}-{request.HospitalId}";
-            var doctorHospital = await _cache.GetOrCreateAsync(doctorHospitalCacheKey, async cacheOpt =>
-            {
-                cacheOpt.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);
-                cacheOpt.SlidingExpiration = TimeSpan.FromMinutes(5);
+            // Validate doctor-hospital association exists
+            var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(
+                request.DoctorId,
+                request.HospitalId,
+                cancellationToken);
 
-                return await _doctorRepository.GetDoctorHospitalAsync(request.DoctorId, request.HospitalId, cancellationToken);
-            });
-
-            if (doctorHospital is null)
+            if (doctorHospital == null)
             {
-                return NotFound(new { message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}." });
+                return NotFound(new
+                {
+                    message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}."
+                });
             }
 
-            var isAppointmentExists = await _appointmentRepository.CheckAppointmentExistsAsync(
+            // Check for duplicate appointment
+            var exists = await _readRepository.CheckAppointmentExistsAsync(
                 request.PatientId,
                 doctorHospital.Id,
                 request.AppointmentDate,
                 cancellationToken);
 
-            if (isAppointmentExists)
+            if (exists)
             {
-                return Conflict(new { message = $"Appointment already exists for Patient ID {request.PatientId}, Doctor ID {request.DoctorId}, Hospital ID {request.HospitalId} on {request.AppointmentDate}." });
+                return Conflict(new
+                {
+                    message = $"Appointment already exists for this patient with this doctor on {request.AppointmentDate}."
+                });
             }
 
-            var appointmentId = await _appointmentRepository.CreateAppointmentAsync(
+            // Create appointment (queued to RabbitMQ)
+            var result = await _writeRepository.CreateAppointmentAsync(
                 doctorHospital,
                 request.PatientId,
                 request.AppointmentDate,
                 request.Notes,
                 cancellationToken);
 
-            return CreatedAtAction(nameof(GetAppointment), new { id = appointmentId }, new { });
+            // result can be either int (ID) or string (reference) depending on implementation
+            if (result is string appointmentRef)
+            {
+                return Accepted(new
+                {
+                    appointmentReference = appointmentRef,
+                    status = "Processing",
+                    message = "Appointment is being created. Use the reference to check status.",
+                    statusUrl = $"/api/appointments/status/{appointmentRef}"
+                });
+            }
+            else if (result is int appointmentId)
+            {
+                // Fallback for sync implementation
+                return CreatedAtAction(nameof(GetAppointment), new { id = appointmentId }, new { id = appointmentId });
+            }
+
+            return StatusCode(500, new { message = "Unexpected result type from repository" });
         }
         catch (DailyLimitReachedException ex)
         {
@@ -90,6 +118,50 @@ public class AppointmentsController : ControllerBase
     }
 
     /// <summary>
+    /// Get appointment processing status by reference
+    /// </summary>
+    [HttpGet("status/{appointmentReference}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> GetAppointmentStatus(
+        string appointmentReference,
+        CancellationToken cancellationToken)
+    {
+        var status = await _statusTracker.GetStatusAsync(appointmentReference, cancellationToken);
+
+        if (status == null)
+        {
+            return NotFound(new { message = "Appointment reference not found." });
+        }
+
+        if (status.Success && status.AppointmentId.HasValue)
+        {
+            return Ok(new
+            {
+                status = "Completed",
+                appointmentId = status.AppointmentId.Value,
+                processedAt = status.ProcessedAt,
+                appointmentUrl = $"/api/appointments/{status.AppointmentId.Value}"
+            });
+        }
+        else if (!status.Success && !string.IsNullOrEmpty(status.ErrorMessage))
+        {
+            return Ok(new
+            {
+                status = "Failed",
+                errorMessage = status.ErrorMessage,
+                processedAt = status.ProcessedAt
+            });
+        }
+
+        return Ok(new
+        {
+            status = "Processing",
+            message = "Appointment is being created..."
+        });
+    }
+
+    /// <summary>
     /// Get appointment details by ID
     /// </summary>
     [HttpGet("{id}")]
@@ -97,7 +169,7 @@ public class AppointmentsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult> GetAppointment(int id, CancellationToken cancellationToken)
     {
-        var appointment = await _appointmentRepository.GetAppointmentByIdAsync(id, cancellationToken);
+        var appointment = await _readRepository.GetAppointmentByIdAsync(id, cancellationToken);
 
         if (appointment == null)
         {
@@ -119,7 +191,7 @@ public class AppointmentsController : ControllerBase
         DateOnly date,
         CancellationToken cancellationToken)
     {
-        var appointments = await _appointmentRepository.GetAppointmentsByDoctorAndDateAsync(
+        var appointments = await _readRepository.GetAppointmentsByDoctorAndDateAsync(
             doctorId,
             hospitalId,
             date,
@@ -145,7 +217,7 @@ public class AppointmentsController : ControllerBase
             return BadRequest(new { message = "Doctor ID and Hospital ID are required." });
         }
 
-        var appointments = await _appointmentRepository.GetAppointmentsByDoctorAndDateAsync(
+        var appointments = await _readRepository.GetAppointmentsByDoctorAndDateAsync(
             doctorId,
             hospitalId,
             date,
