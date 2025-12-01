@@ -4,9 +4,9 @@ var postgres = builder.AddPostgres("appointments-db")
     //.WithDataVolume()
     .WithPgAdmin();
 
-var redis = builder.AddRedis("redis")
+var redis = builder.AddRedis("redis");
     //.WithDataVolume()
-    .WithRedisInsight();
+    //.WithRedisInsight();
 
 var rabbitmq = builder.AddRabbitMQ("rabbitmq")
     .WithManagementPlugin(); // Adds RabbitMQ management UI

@@ -22,7 +22,11 @@ public class AppointmentConsumerWorker : BackgroundService
     private readonly ILogger<AppointmentConsumerWorker> _logger;
     private readonly IConnection _connection;
     private IChannel? _channel;
+    
+    // RabbitMQ configuration constants
+    private const string ExchangeName = "appointments";
     private const string QueueName = "appointment-creation";
+    private const string RoutingKey = "appointment.create";
     private const ushort PrefetchCount = 50; // Process up to 50 messages concurrently per consumer
 
     public AppointmentConsumerWorker(
@@ -40,6 +44,36 @@ public class AppointmentConsumerWorker : BackgroundService
         _logger.LogInformation("Appointment Consumer Worker starting...");
 
         _channel = await _connection.CreateChannelAsync(cancellationToken: stoppingToken);
+        
+        // Declare exchange (must match publisher configuration)
+        await _channel.ExchangeDeclareAsync(
+            exchange: ExchangeName,
+            type: ExchangeType.Topic,
+            durable: true,
+            autoDelete: false,
+            cancellationToken: stoppingToken);
+        
+        // Declare queue with same settings as publisher
+        var args = new Dictionary<string, object?>
+        {
+            { "x-queue-mode", "lazy" },
+            { "x-max-priority", 10 }
+        };
+        
+        await _channel.QueueDeclareAsync(
+            queue: QueueName,
+            durable: true,
+            exclusive: false,
+            autoDelete: false,
+            arguments: args,
+            cancellationToken: stoppingToken);
+        
+        // Bind queue to exchange
+        await _channel.QueueBindAsync(
+            queue: QueueName,
+            exchange: ExchangeName,
+            routingKey: RoutingKey,
+            cancellationToken: stoppingToken);
         
         // Set QoS - prefetch multiple messages for better throughput
         await _channel.BasicQosAsync(
@@ -65,27 +99,15 @@ public class AppointmentConsumerWorker : BackgroundService
                     return;
                 }
 
-                _logger.LogInformation(
-                    "Processing appointment {Reference} - Serial {Serial} for Doctor-Hospital {DH} on {Date}",
-                    message.AppointmentReference,
-                    message.SerialNumber,
-                    message.DoctorHospitalId,
-                    message.AppointmentDate);
-
-                // Process the message
                 var success = await ProcessAppointmentAsync(message, stoppingToken);
 
                 if (success)
                 {
-                    // Acknowledge message
                     await _channel.BasicAckAsync(ea.DeliveryTag, false, stoppingToken);
-                    _logger.LogInformation("Successfully processed appointment {Reference}", message.AppointmentReference);
                 }
-                else
+                else 
                 {
-                    // Reject and requeue for retry (with dead-letter exchange configured, it will go to DLX after max retries)
                     await _channel.BasicNackAsync(ea.DeliveryTag, false, true, stoppingToken);
-                    _logger.LogWarning("Failed to process appointment {Reference}, requeued", message.AppointmentReference);
                 }
             }
             catch (Exception ex)
@@ -104,7 +126,6 @@ public class AppointmentConsumerWorker : BackgroundService
         _logger.LogInformation("Appointment Consumer Worker is running and consuming messages...");
 
         // Wait until cancellation is requested
-        // Keep the worker alive
         try
         {
             await Task.Delay(Timeout.Infinite, stoppingToken);
@@ -123,7 +144,6 @@ public class AppointmentConsumerWorker : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var statusTracker = scope.ServiceProvider.GetRequiredService<IAppointmentStatusTracker>();
-        var redisSerialService = scope.ServiceProvider.GetRequiredService<IRedisSerialNumberService>();
 
         try
         {
@@ -148,6 +168,13 @@ public class AppointmentConsumerWorker : BackgroundService
                 appointment.Id,
                 cancellationToken);
 
+            // Remove in-flight marker
+            await statusTracker.RemoveInFlightMarkerAsync(
+                message.PatientId,
+                message.DoctorHospitalId,
+                message.AppointmentDate,
+                cancellationToken);
+
             return true;
         }
         catch (Exception ex)
@@ -162,11 +189,12 @@ public class AppointmentConsumerWorker : BackgroundService
                 ex.Message,
                 cancellationToken);
 
-            // Decrement the Redis counter since we failed to create the appointment
-            //await redisSerialService.DecrementSerialNumberAsync(
-            //    message.DoctorHospitalId,
-            //    message.AppointmentDate,
-            //    cancellationToken);
+            // Remove in-flight marker even on failure
+            await statusTracker.RemoveInFlightMarkerAsync(
+                message.PatientId,
+                message.DoctorHospitalId,
+                message.AppointmentDate,
+                cancellationToken);
 
             return false;
         }

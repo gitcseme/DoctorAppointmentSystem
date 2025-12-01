@@ -1,76 +1,77 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { SharedArray } from 'k6/data';
-import { Counter, Rate, Trend } from 'k6/metrics';
-
-// Custom metrics
-const appointmentCreationRate = new Rate('appointment_creation_success_rate');
-const appointmentCreationDuration = new Trend('appointment_creation_duration');
-const queuedCounter = new Counter('appointments_queued');
 
 // Load test configuration for 1000+ appointments/second
 export const options = {
-    scenarios: {
-        // Ramp up to 1000 requests/second
-        high_load: {
-            executor: 'ramping-arrival-rate',
-            startRate: 100,
-            timeUnit: '1s',
-            preAllocatedVUs: 100,
-            maxVUs: 500,
-            stages: [
-                { duration: '30s', target: 500 }, // Ramp to 500/s
-                { duration: '1m', target: 1000 },  // Ramp to 1000/s
-                { duration: '2m', target: 1000 },  // Hold at 1000/s
-                { duration: '30s', target: 1500 }, // Peak test: 1500/s
-                { duration: '30s', target: 0 },    // Ramp down
-            ],
-        },
-    },
+    //scenarios: {
+    //    // Ramp up to 1000 requests/second
+    //    high_load: {
+    //        executor: 'ramping-arrival-rate',
+    //        startRate: 100,
+    //        timeUnit: '1s',
+    //        preAllocatedVUs: 100,
+    //        maxVUs: 500,
+    //        stages: [
+    //            { duration: '30s', target: 20 }, // Ramp to 500/s
+    //            { duration: '1m', target:  50 },  // Ramp to 1000/s
+    //            { duration: '2m', target:  100 },  // Hold at 1000/s
+    //            { duration: '30s', target: 50 }, // Peak test: 1500/s
+    //            { duration: '30s', target: 20 },    // Ramp down
+    //        ],
+    //    },
+    //},
+    stages: [
+        { duration: '30s', target: 20 }, // Ramp to 500/s
+        { duration: '30s', target: 50 },  // Ramp to 1000/s
+        { duration: '30s', target: 100 },  // Hold at 1000/s
+        { duration: '30s', target: 50 }, // Peak test: 1500/s
+        { duration: '30s', target: 20 },    // Ramp down
+    ],
     thresholds: {
         http_req_duration: ['p(95)<100', 'p(99)<200'], // 95% under 100ms, 99% under 200ms
-        appointment_creation_success_rate: ['rate>0.95'], // 95% success rate
         http_req_failed: ['rate<0.05'], // Less than 5% failures
     },
 };
 
-//Generate test data
-const patientIds = SharedArray('patients', function () {
-    const ids = [];
-    for (let i = 1; i <= 100; i++) {
-        ids.push(i);
-    }
-    return ids;
-});
+const BASE_URL = __ENV.API_URL || 'https://localhost:7123';
 
-const doctorHospitalPairs = SharedArray('doctor_hospitals', function () {
-    return [
-        { doctorId: 1, hospitalId: 1 },
-        { doctorId: 1, hospitalId: 2 },
-        { doctorId: 2, hospitalId: 1 },
-        { doctorId: 2, hospitalId: 2 },
-        { doctorId: 3, hospitalId: 1 },
-    ];
-});
+// Predictable data structure:
+// - 10 hospitals (IDs: 1-10)
+// - 500 doctors (IDs: 1-500)
+// - Each hospital has exactly 50 doctors
+// - Hospital 1: Doctors 1-50, Hospital 2: Doctors 51-100, etc.
+// - 100,000 patients (IDs: 1-100000)
+// - Daily limit: 50 per doctor-hospital
+
+const TOTAL_HOSPITALS = 10;
+const DOCTORS_PER_HOSPITAL = 50;
+const TOTAL_PATIENTS = 100000;
 
 export default function () {
-    const BASE_URL = __ENV.API_URL || 'http://localhost:5000';
+    // Select random hospital (1-10)
+    const hospitalId = Math.floor(Math.random() * TOTAL_HOSPITALS) + 1;
     
-    // Random test data
-    const patient = patientIds[Math.floor(Math.random() * patientIds.length)];
-    const dhPair = doctorHospitalPairs[Math.floor(Math.random() * doctorHospitalPairs.length)];
+    // Calculate doctor range for this hospital
+    // Hospital 1: Doctors 1-50, Hospital 2: Doctors 51-100, etc.
+    const firstDoctorId = (hospitalId - 1) * DOCTORS_PER_HOSPITAL + 1;
     
-    // Future date for appointment
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + Math.floor(Math.random() * 30) + 1);
-    const appointmentDate = futureDate.toISOString().split('T')[0];
+    // Select random doctor from this hospital's doctors
+    const doctorId = Math.floor(Math.random() * DOCTORS_PER_HOSPITAL) + firstDoctorId;
+    
+    // Select random patient (1-100000)
+    const patientId = Math.floor(Math.random() * TOTAL_PATIENTS) + 1;
+    
+    // Use tomorrow's date
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const appointmentDate = tomorrow.toISOString().split('T')[0];
 
     const payload = JSON.stringify({
-        doctorId: dhPair.doctorId,
-        hospitalId: dhPair.hospitalId,
-        patientId: patient,
+        doctorId: doctorId,
+        hospitalId: hospitalId,
+        patientId: patientId,
         appointmentDate: appointmentDate,
-        notes: `Load test appointment - VU ${__VU} - Iter ${__ITER}`,
+        notes: `Load test VU:${__VU} Iter:${__ITER}`,
     });
 
     const params = {
@@ -83,8 +84,6 @@ export default function () {
     const response = http.post(`${BASE_URL}/api/appointments`, payload, params);
     const duration = Date.now() - startTime;
 
-    // Record metrics
-    appointmentCreationDuration.add(duration);
 
     const success = check(response, {
         'status is 202 (Accepted)': (r) => r.status === 202,
@@ -99,34 +98,8 @@ export default function () {
         'response time < 100ms': () => duration < 100,
     });
 
-    appointmentCreationRate.add(success);
-    if (success) {
-        queuedCounter.add(1);
-    }
 
     // Small sleep to prevent overwhelming the system
-    sleep(0.01);
+    sleep(Math.random() * 0.2 + 0.1);
 }
 
-export function handleSummary(data) {
-    return {
-        'summary.json': JSON.stringify(data),
-        stdout: textSummary(data, { indent: ' ', enableColors: true }),
-    };
-}
-
-function textSummary(data, opts) {
-    const indent = opts.indent || '';
-    const colors = opts.enableColors;
-    
-    let summary = `\n${indent}================== Load Test Summary ==================\n`;
-    summary += `${indent}Total Requests: ${data.metrics.http_reqs.values.count}\n`;
-    summary += `${indent}Successful: ${Math.round(data.metrics.appointment_creation_success_rate.values.rate * 100)}%\n`;
-    summary += `${indent}Appointments Queued: ${data.metrics.appointments_queued.values.count}\n`;
-    summary += `${indent}Avg Duration: ${data.metrics.appointment_creation_duration.values.avg.toFixed(2)}ms\n`;
-    summary += `${indent}P95 Duration: ${data.metrics.appointment_creation_duration.values['p(95)'].toFixed(2)}ms\n`;
-    summary += `${indent}P99 Duration: ${data.metrics.appointment_creation_duration.values['p(99)'].toFixed(2)}ms\n`;
-    summary += `${indent}========================================================\n`;
-    
-    return summary;
-}

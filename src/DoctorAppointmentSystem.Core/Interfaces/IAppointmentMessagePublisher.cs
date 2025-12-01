@@ -39,4 +39,24 @@ public interface IAppointmentStatusTracker
     /// Gets the current status and result
     /// </summary>
     Task<AppointmentProcessingResult?> GetStatusAsync(string appointmentReference, CancellationToken cancellationToken = default);
+    
+    /// <summary>
+    /// Marks an appointment as in-flight (queued but not yet processed) to prevent duplicates
+    /// Returns true if successfully marked, false if already exists
+    /// </summary>
+    Task<bool> MarkAsInFlightAsync(
+        int patientId, 
+        int doctorHospitalId, 
+        DateOnly appointmentDate, 
+        string appointmentReference,
+        CancellationToken cancellationToken = default);
+    
+    /// <summary>
+    /// Removes the in-flight marker when appointment is processed (success or failure)
+    /// </summary>
+    Task RemoveInFlightMarkerAsync(
+        int patientId, 
+        int doctorHospitalId, 
+        DateOnly appointmentDate,
+        CancellationToken cancellationToken = default);
 }

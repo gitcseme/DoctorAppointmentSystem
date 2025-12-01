@@ -42,79 +42,73 @@ public class AppointmentsController : ControllerBase
         [FromBody] CreateAppointmentRequest request,
         CancellationToken cancellationToken)
     {
-        try
+        var patient = await _patientRepository.GetByIdAsync(request.PatientId, cancellationToken);
+        if (patient == null)
         {
-            // Validate patient exists
-            var patient = await _patientRepository.GetByIdAsync(request.PatientId, cancellationToken);
-            if (patient == null)
-            {
-                return NotFound(new { message = $"Patient with ID {request.PatientId} not found." });
-            }
-
-            // Validate doctor-hospital association exists
-            var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(
-                request.DoctorId,
-                request.HospitalId,
-                cancellationToken);
-
-            if (doctorHospital == null)
-            {
-                return NotFound(new
-                {
-                    message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}."
-                });
-            }
-
-            // Check for duplicate appointment
-            var exists = await _readRepository.CheckAppointmentExistsAsync(
-                request.PatientId,
-                doctorHospital.Id,
-                request.AppointmentDate,
-                cancellationToken);
-
-            if (exists)
-            {
-                return Conflict(new
-                {
-                    message = $"Appointment already exists for this patient with this doctor on {request.AppointmentDate}."
-                });
-            }
-
-            // Create appointment (queued to RabbitMQ)
-            var result = await _writeRepository.CreateAppointmentAsync(
-                doctorHospital,
-                request.PatientId,
-                request.AppointmentDate,
-                request.Notes,
-                cancellationToken);
-
-            // result can be either int (ID) or string (reference) depending on implementation
-            if (result is string appointmentRef)
-            {
-                return Accepted(new
-                {
-                    appointmentReference = appointmentRef,
-                    status = "Processing",
-                    message = "Appointment is being created. Use the reference to check status.",
-                    statusUrl = $"/api/appointments/status/{appointmentRef}"
-                });
-            }
-            else if (result is int appointmentId)
-            {
-                // Fallback for sync implementation
-                return CreatedAtAction(nameof(GetAppointment), new { id = appointmentId }, new { id = appointmentId });
-            }
-
-            return StatusCode(500, new { message = "Unexpected result type from repository" });
+            return NotFound(new { message = $"Patient with ID {request.PatientId} not found." });
         }
-        catch (DailyLimitReachedException ex)
+
+        var doctorHospital = await _doctorRepository.GetDoctorHospitalAsync(
+            request.DoctorId,
+            request.HospitalId,
+            cancellationToken);
+
+        if (doctorHospital == null)
         {
-            return Conflict(new { message = ex.Message });
+            return NotFound(new
+            {
+                message = $"Doctor with ID {request.DoctorId} is not associated with Hospital ID {request.HospitalId}."
+            });
         }
-        catch (DoctorHospitalNotFoundException ex)
+
+        // Check for existing appointment in PostgreSQL
+        var appointExists = await _readRepository.CheckAppointmentExistsAsync(
+            request.PatientId,
+            doctorHospital.Id,
+            request.AppointmentDate,
+            cancellationToken);
+
+        if (appointExists)
         {
-            return NotFound(new { message = ex.Message });
+            return Conflict(new
+            {
+                message = $"Appointment already exists for this patient with this doctor on {request.AppointmentDate}."
+            });
         }
+
+        var appointmentInFlightRef = Guid.NewGuid().ToString("N");
+
+        // Mark as in-flight to prevent concurrent duplicate requests
+        var markedAsInFlight = await _statusTracker.MarkAsInFlightAsync(
+            request.PatientId,
+            doctorHospital.Id,
+            request.AppointmentDate,
+            appointmentInFlightRef,
+            cancellationToken);
+
+        if (!markedAsInFlight)
+        {
+            return Conflict(new
+            {
+                message = $"An appointment request for this patient with this doctor on {request.AppointmentDate} is already being processed."
+            });
+        }
+
+        // Create appointment (queued to RabbitMQ)
+        var appointmentReference = await _writeRepository.CreateAppointmentAsync(
+            doctorHospital,
+            request.PatientId,
+            request.AppointmentDate,
+            request.Notes,
+            cancellationToken);
+
+        return Accepted(new
+        {
+            appointmentReference,
+            status = "Processing",
+            message = "Appointment is being created. Use the reference to check status.",
+            statusUrl = $"/api/appointments/status/{appointmentReference}"
+        });
     }
 
     /// <summary>
