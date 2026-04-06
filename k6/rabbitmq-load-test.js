@@ -21,11 +21,11 @@ export const options = {
     //    },
     //},
     stages: [
-        { duration: '30s', target: 20 }, // Ramp to 500/s
-        { duration: '30s', target: 50 },  // Ramp to 1000/s
-        { duration: '30s', target: 100 },  // Hold at 1000/s
-        { duration: '30s', target: 50 }, // Peak test: 1500/s
-        { duration: '30s', target: 20 },    // Ramp down
+        { duration: '30s', target: 30 }, // Ramp to 500/s
+        { duration: '30s', target: 100 },  // Ramp to 1000/s
+        { duration: '30s', target: 200 },  // Hold at 1000/s
+        { duration: '30s', target: 100 }, // Peak test: 1500/s
+        { duration: '30s', target: 30 },    // Ramp down
     ],
     thresholds: {
         http_req_duration: ['p(95)<100', 'p(99)<200'], // 95% under 100ms, 99% under 200ms
@@ -43,8 +43,8 @@ const BASE_URL = __ENV.API_URL || 'https://localhost:7123';
 // - 100,000 patients (IDs: 1-100000)
 // - Daily limit: 50 per doctor-hospital
 
-const TOTAL_HOSPITALS = 10;
-const DOCTORS_PER_HOSPITAL = 50;
+const TOTAL_HOSPITALS = 20;
+const DOCTORS_PER_HOSPITAL = 70;
 const TOTAL_PATIENTS = 100000;
 
 export default function () {
