@@ -62,15 +62,32 @@ public static class Extensions
             .WithTracing(tracing =>
             {
                 tracing.AddSource(builder.Environment.ApplicationName)
-                    .AddAspNetCoreInstrumentation(tracing =>
+                    .AddAspNetCoreInstrumentation(options =>
+                    {
                         // Exclude health check requests from tracing
-                        tracing.Filter = context =>
+                        options.Filter = context =>
                             !context.Request.Path.StartsWithSegments(HealthEndpointPath)
-                            && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath)
-                    )
+                            && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath);
+                        
+                        // Record exceptions
+                        options.RecordException = true;
+                        
+                        // Enrich spans with additional information
+                        options.EnrichWithHttpRequest = (activity, httpRequest) =>
+                        {
+                            activity.SetTag("http.client_ip", httpRequest.HttpContext.Connection.RemoteIpAddress?.ToString());
+                            activity.SetTag("http.user_agent", httpRequest.Headers.UserAgent.ToString());
+                        };
+                        
+                        options.EnrichWithHttpResponse = (activity, httpResponse) =>
+                        {
+                            activity.SetTag("http.response_content_length", httpResponse.ContentLength);
+                        };
+                    })
+                    .AddHttpClientInstrumentation()
+                    .AddEntityFrameworkCoreInstrumentation();
                     // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
                     //.AddGrpcClientInstrumentation()
-                    .AddHttpClientInstrumentation();
             });
 
         builder.AddOpenTelemetryExporters();

@@ -10,8 +10,9 @@ public class DataSeeder
     private readonly AppDbContext _context;
     private readonly Random _random = new();
 
-    private const int HospitalsToCreate = 10;
-    private const int DoctorsPerHospital = 50;
+    private const int HospitalsToCreate = 20;
+    private const int DoctorsPerHospital = 70;
+    private const int DailyPatientLimit = 100;
 
     public DataSeeder(AppDbContext context)
     {
@@ -92,7 +93,7 @@ public class DataSeeder
 
     private async Task SeedDoctorsAsync()
     {
-        const int totalDoctors = HospitalsToCreate * DoctorsPerHospital; // 500
+        const int totalDoctors = HospitalsToCreate * DoctorsPerHospital;
 
         Console.WriteLine();
         Console.WriteLine($"Creating {totalDoctors:N0} doctors ({DoctorsPerHospital} per hospital)...");
@@ -136,21 +137,19 @@ public class DataSeeder
 
         foreach (var hospital in hospitals)
         {
-            // Assign exactly 50 doctors to each hospital
             for (int i = 0; i < DoctorsPerHospital && doctorIndex < doctors.Count; i++, doctorIndex++)
             {
                 var doctorHospital = new DoctorHospital
                 {
                     DoctorId = doctors[doctorIndex].Id,
                     HospitalId = hospital.Id,
-                    DailyPatientLimit = 50, // Fixed daily limit for predictability
+                    DailyPatientLimit = DailyPatientLimit,
                     CreatedAt = DateTime.UtcNow
                 };
 
                 doctorHospitals.Add(doctorHospital);
             }
 
-            // Save in batches of 1000
             if (doctorHospitals.Count >= 1000)
             {
                 await _context.DoctorHospitals.AddRangeAsync(doctorHospitals);

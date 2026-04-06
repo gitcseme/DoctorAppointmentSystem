@@ -23,7 +23,7 @@ public class RedisAppointmentRepository : IAppointmentRepository
         _redisSerialService = redisSerialService;
     }
 
-    public async Task<int> CreateAppointmentAsync(
+    public async Task<object> CreateAppointmentAsync(
         DoctorHospital doctorHospital,
         int patientId,
         DateOnly appointmentDate,
@@ -59,7 +59,7 @@ public class RedisAppointmentRepository : IAppointmentRepository
             _context.Appointments.Add(appointment);
             await _context.SaveChangesAsync(cancellationToken);
 
-            return appointment.Id;
+            return appointment.Id; // Return ID as object
         }
         catch (Exception ex)
         {

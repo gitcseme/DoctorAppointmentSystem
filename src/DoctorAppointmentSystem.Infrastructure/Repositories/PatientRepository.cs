@@ -25,9 +25,7 @@ public class PatientRepository : IPatientRepository
     public async Task<Patient?> GetByIdAsync(int id, CancellationToken cancellationToken = default)
     {
         return await _context.Patients
-            .Include(p => p.Appointments)
-            .ThenInclude(a => a.DoctorHospital)
-            .ThenInclude(dh => dh.Doctor)
+            .AsNoTracking()
             .FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
     }
 

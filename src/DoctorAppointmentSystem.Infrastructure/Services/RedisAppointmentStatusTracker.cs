@@ -1,0 +1,121 @@
+using System.Text.Json;
+using StackExchange.Redis;
+using DoctorAppointmentSystem.Core.DTOs;
+using DoctorAppointmentSystem.Core.Interfaces;
+
+namespace DoctorAppointmentSystem.Infrastructure.Services;
+
+/// <summary>
+/// Tracks appointment processing status in Redis with TTL
+/// </summary>
+public class RedisAppointmentStatusTracker : IAppointmentStatusTracker
+{
+    private readonly IConnectionMultiplexer _redis;
+    private readonly TimeSpan _statusTtl = TimeSpan.FromHours(24); // Keep status for 24 hours
+    private readonly TimeSpan _inFlightTtl = TimeSpan.FromMinutes(5); // In-flight marker expires after 5 minutes
+
+    public RedisAppointmentStatusTracker(IConnectionMultiplexer redis)
+    {
+        _redis = redis;
+    }
+
+    private string GetStatusKey(string appointmentReference) => $"appointment:status:{appointmentReference}";
+    
+    private string GetInFlightKey(int patientId, int doctorHospitalId, DateOnly appointmentDate) 
+        => $"appointment:inflight:{patientId}:{doctorHospitalId}:{appointmentDate:yyyy-MM-dd}";
+
+    public async Task SetProcessingAsync(string appointmentReference, CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var result = new AppointmentProcessingResult
+        {
+            AppointmentReference = appointmentReference,
+            Success = false,
+            ProcessedAt = DateTime.UtcNow
+        };
+
+        var json = JsonSerializer.Serialize(result);
+        await db.StringSetAsync(GetStatusKey(appointmentReference), json, _statusTtl);
+    }
+
+    public async Task SetCompletedAsync(
+        string appointmentReference, 
+        int appointmentId, 
+        CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var result = new AppointmentProcessingResult
+        {
+            AppointmentReference = appointmentReference,
+            Success = true,
+            AppointmentId = appointmentId,
+            ProcessedAt = DateTime.UtcNow
+        };
+
+        var json = JsonSerializer.Serialize(result);
+        await db.StringSetAsync(GetStatusKey(appointmentReference), json, _statusTtl);
+    }
+
+    public async Task SetFailedAsync(
+        string appointmentReference, 
+        string errorMessage, 
+        CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var result = new AppointmentProcessingResult
+        {
+            AppointmentReference = appointmentReference,
+            Success = false,
+            ErrorMessage = errorMessage,
+            ProcessedAt = DateTime.UtcNow
+        };
+
+        var json = JsonSerializer.Serialize(result);
+        await db.StringSetAsync(GetStatusKey(appointmentReference), json, _statusTtl);
+    }
+
+    public async Task<AppointmentProcessingResult?> GetStatusAsync(
+        string appointmentReference, 
+        CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var json = await db.StringGetAsync(GetStatusKey(appointmentReference));
+
+        if (json.IsNullOrEmpty)
+            return null;
+
+        return JsonSerializer.Deserialize<AppointmentProcessingResult>(json!);
+    }
+
+    public async Task<bool> MarkAsInFlightAsync(
+        int patientId, 
+        int doctorHospitalId, 
+        DateOnly appointmentDate, 
+        string appointmentReference,
+        CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var key = GetInFlightKey(patientId, doctorHospitalId, appointmentDate);
+        
+        // Use SET NX (set if not exists) to atomically check and set
+        // Returns true if set successfully (key didn't exist), false if already exists
+        var wasSet = await db.StringSetAsync(
+            key, 
+            appointmentReference, 
+            _inFlightTtl,
+            When.NotExists);
+        
+        return wasSet;
+    }
+
+    public async Task RemoveInFlightMarkerAsync(
+        int patientId, 
+        int doctorHospitalId, 
+        DateOnly appointmentDate,
+        CancellationToken cancellationToken = default)
+    {
+        var db = _redis.GetDatabase();
+        var key = GetInFlightKey(patientId, doctorHospitalId, appointmentDate);
+        await db.KeyDeleteAsync(key);
+    }
+}

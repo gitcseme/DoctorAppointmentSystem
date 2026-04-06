@@ -15,7 +15,7 @@ public class PostgresAppointmentRepository : IAppointmentRepository
         _context = context;
     }
 
-    public async Task<int> CreateAppointmentAsync(
+    public async Task<object> CreateAppointmentAsync(
         DoctorHospital doctorHospital,
         int patientId,
         DateOnly appointmentDate,
@@ -26,7 +26,7 @@ public class PostgresAppointmentRepository : IAppointmentRepository
         // We need strategy for re-trying the entire operation in case of transient failures
         var strategy = _context.Database.CreateExecutionStrategy();
 
-        return await strategy.ExecuteAsync(async () =>
+        int appointmentId = await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await _context.Database.BeginTransactionAsync(
                 System.Data.IsolationLevel.ReadCommitted,
@@ -84,6 +84,8 @@ public class PostgresAppointmentRepository : IAppointmentRepository
                 throw;
             }
         });
+
+        return appointmentId; // Return as object for interface compliance
     }
 
     private async Task<AppointmentCounter> InsertCounterIfNotExistsAsync(DoctorHospital doctorHospital, 
