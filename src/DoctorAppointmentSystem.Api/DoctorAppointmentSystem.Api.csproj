@@ -24,6 +24,7 @@
     <ProjectReference Include="..\DoctorAppointmentSystem.Core\DoctorAppointmentSystem.Core.csproj" />
     <ProjectReference Include="..\DoctorAppointmentSystem.Infrastructure\DoctorAppointmentSystem.Infrastructure.csproj" />
     <ProjectReference Include="..\DoctorAppointmentSystem.ServiceDefaults\DoctorAppointmentSystem.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\DoctorAppointmentSystem.Application\DoctorAppointmentSystem.Application.csproj" />
   </ItemGroup>
 
 </Project>

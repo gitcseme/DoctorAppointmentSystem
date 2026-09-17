@@ -1,5 +1,8 @@
 using DoctorAppointmentSystem.Api.Extensions;
 using DoctorAppointmentSystem.Api.Middleware;
+using DoctorAppointmentSystem.Application.Configuration;
+using DoctorAppointmentSystem.Application.Processors;
+using DoctorAppointmentSystem.Application.Services;
 using DoctorAppointmentSystem.Core.Interfaces;
 using DoctorAppointmentSystem.Infrastructure.Data;
 using DoctorAppointmentSystem.Infrastructure.Repositories;
@@ -9,6 +12,7 @@ using DoctorAppointmentSystem.Infrastructure.Workers;
 using Medallion.Threading;
 using Medallion.Threading.Redis;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using RabbitMQ.Client;
 
@@ -16,10 +20,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// Add Redis connection from Aspire
 builder.AddRedisClient("redis");
 
-// RabbitMQ
 builder.AddRabbitMQClient("rabbitmq");
 
 builder.Services.AddSingleton<IDistributedLockProvider>(sp =>
@@ -28,7 +30,6 @@ builder.Services.AddSingleton<IDistributedLockProvider>(sp =>
     return new RedisDistributedSynchronizationProvider(connectionMultiplexer.GetDatabase());
 });
 
-// Register IDistributedCache using Redis
 builder.Services.AddStackExchangeRedisCache(redisOpt =>
 {
     var redis = builder.Configuration.GetConnectionString("redis");
@@ -41,16 +42,18 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 {
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("appointments-db"),
-            npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
-                maxRetryCount: 3,
-                maxRetryDelay: TimeSpan.FromSeconds(5),
-                errorCodesToAdd: null)
+        npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 3,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorCodesToAdd: null)
     );
 
     options.EnableSensitiveDataLogging(builder.Environment.IsDevelopment());
 });
 
-// Register Redis serial number service
+builder.Services.Configure<AppointmentOptions>(
+    builder.Configuration.GetSection(AppointmentOptions.SectionName));
+
 builder.Services.AddSingleton<IRedisSerialNumberService, RedisSerialNumberService>();
 builder.Services.AddSingleton<IAppointmentStatusTracker, RedisAppointmentStatusTracker>();
 builder.Services.AddSingleton<IAppointmentMessagePublisher>(sp =>
@@ -59,28 +62,41 @@ builder.Services.AddSingleton<IAppointmentMessagePublisher>(sp =>
     return new RabbitMqAppointmentPublisher(connection);
 });
 
-// Register repositories
 builder.Services.AddScoped<IDoctorRepository, DoctorRepository>();
 builder.Services.AddScoped<IHospitalRepository, HospitalRepository>();
 builder.Services.AddScoped<IPatientRepository, PatientRepository>();
 
-// Use RabbitMQ repository for writes, PostgreSQL for reads (CQRS)
-builder.Services.AddScoped<IAppointmentWriteRepository, RabbitMqAppointmentRepository>();
-builder.Services.AddScoped<IAppointmentReadRepository, PostgresAppointmentRepository>();
+var options = builder.Configuration.GetSection(AppointmentOptions.SectionName).Get<AppointmentOptions>()
+    ?? new AppointmentOptions();
 
-// Register background worker for consuming RabbitMQ messages
-// Scale by adding multiple workers: Replicas=3
-builder.Services.AddHostedService<AppointmentConsumerWorker>();
-
-// Add API documentation
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(options =>
+if (options.Mode == "Sync")
 {
-    options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
+    if (options.Provider == "Redis")
+    {
+        builder.Services.AddScoped<ISyncProcessor, RedisAppointmentProcessor>();
+    }
+    else if (options.Provider == "Postgres")
+    {
+        builder.Services.AddScoped<ISyncProcessor, PostgresAppointmentProcessor>();
+    }
+
+    builder.Services.AddScoped<ISyncAppointmentService, SyncAppointmentService>();
+}
+else // Async
+{
+    builder.Services.AddScoped<IAsyncProcessor, RabbitMqAppointmentProcessor>();
+    builder.Services.AddScoped<IAsyncAppointmentService, AsyncAppointmentService>();
+    builder.Services.AddHostedService<AppointmentConsumerWorker>();
+}
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(swaggerOptions =>
+{
+    swaggerOptions.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
     {
         Title = "Doctor Appointment System API",
         Version = "v1",
-        Description = "Production-ready API with RabbitMQ async processing for 1000+ appointments/second",
+        Description = $"API with {options.Mode} mode using {options.Provider} provider",
         Contact = new Microsoft.OpenApi.Models.OpenApiContact
         {
             Name = "API Support",
@@ -89,7 +105,6 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// Add CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -115,7 +130,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(options =>
     {
         options.SwaggerEndpoint("/swagger/v1/swagger.json", "Doctor Appointment System API v1");
-        options.RoutePrefix = string.Empty; // Swagger UI at root
+        options.RoutePrefix = string.Empty;
     });
 }
 
@@ -127,7 +142,6 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Health check endpoint
 app.MapGet("/health", async (AppDbContext dbContext) =>
 {
     try

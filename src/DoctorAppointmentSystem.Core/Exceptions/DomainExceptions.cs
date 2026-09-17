@@ -34,3 +34,10 @@ public class AppointmentCreationFailedException : AppointmentException
     {
     }
 }
+
+public class DuplicateAppointmentException : AppointmentException
+{
+    public DuplicateAppointmentException(string message) : base(message)
+    {
+    }
+}
